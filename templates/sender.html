@@ -19,6 +19,12 @@
         function sendImage(event) {
             event.preventDefault();
             var formData = new FormData(document.getElementById('imageForm'));
+            var submitBtn = document.querySelector('.submit-btn');
+            var stopBtn = document.querySelector('.stop-btn');
+            
+            submitBtn.disabled = true;
+            stopBtn.classList.add('active');
+            
             fetch('/send_image', {
                 method: 'POST',
                 body: formData
@@ -29,12 +35,18 @@
                     console.log("Image is being sent");
                 } else {
                     console.error("Failed to send image");
+                    // Reset buttons if sending fails
+                    submitBtn.disabled = false;
+                    stopBtn.classList.remove('active');
                 }
             });
         }
 
         function stopSending(event) {
             event.preventDefault();
+            var submitBtn = document.querySelector('.submit-btn');
+            var stopBtn = document.querySelector('.stop-btn');
+            
             fetch('/stop', {
                 method: 'POST'
             })
@@ -42,6 +54,8 @@
             .then(data => {
                 if (data.status === "stopped") {
                     console.log("Stopped sending image");
+                    submitBtn.disabled = false;
+                    stopBtn.classList.remove('active');
                 } else {
                     console.error("Failed to stop");
                 }

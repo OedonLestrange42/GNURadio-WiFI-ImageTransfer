@@ -24,6 +24,8 @@ def send_image(image_path, port):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         while not stop_flag.is_set():
             for piece in pieces:
+                if stop_flag.is_set():
+                    break
                 data = pickle.dumps(piece)
                 message_size = struct.pack("=L", len(data))
                 # print(len(data))

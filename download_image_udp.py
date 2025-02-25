@@ -33,13 +33,13 @@ def receive_pieces():
         
         while not stop_thread:
             try:
-                data, client_address = s.recvfrom(4096)
+                data, client_address = s.recvfrom(2048)
                 if not data:
                     continue
                     
                 piece = pickle.loads(data)
                 (x, y, c), val = piece
-                print(f"Received piece at position ({x}, {y}, {c})")
+                # print(f"Received piece at position ({x}, {y}, {c})")
                 
                 reconstructed_image = redraw_image(piece, reconstructed_image)
                 
@@ -52,7 +52,7 @@ def receive_pieces():
                 buf.seek(0)
                 img_base64 = base64.b64encode(buf.getvalue()).decode('utf-8')
                 socketio.emit('image_update', {'image': f'data:image/jpeg;base64,{img_base64}'})
-                eventlet.sleep(0.03)
+                eventlet.sleep(0.02)
                 
             except socket.timeout:
                 continue

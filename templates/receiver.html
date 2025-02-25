@@ -28,6 +28,8 @@
         const socket = io();
         const status = document.getElementById('status');
         const imagePreview = document.getElementById('imagePreview');
+        const startBtn = document.querySelector('.submit-btn');
+        const stopBtn = document.querySelector('.stop-btn');
         
         socket.on('image_update', function(data) {
             console.log('Received image update');
@@ -35,16 +37,20 @@
                 imagePreview.src = data.image;
             }
         });
-
+    
         function startReceiving() {
             console.log('Starting receiver...');
             status.textContent = 'Starting receiver...';
+            startBtn.disabled = true;
+            stopBtn.classList.add('active');
             socket.emit('start_receiving');
         }
     
         function stopReceiving() {
             console.log('Stopping receiver...');
             status.textContent = 'Stopping receiver...';
+            startBtn.disabled = false;
+            stopBtn.classList.remove('active');
             socket.emit('stop_receiving');
         }
     </script>
