@@ -29,7 +29,7 @@ def send_image(image_path, port):
                 data = pickle.dumps(piece)
                 message_size = struct.pack("=L", len(data))
                 # print(len(data))
-                s.sendto(data, (HOST, port))
+                s.sendto(message_size + data, (HOST, port))
                 time.sleep(0.05)
             print("loop accomplished")
 
