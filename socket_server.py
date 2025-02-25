@@ -7,11 +7,11 @@ from image_detach_rebuild import detach_image
 # Configuration
 HOST = 'localhost'
 PORT = 65432
-IMAGE_PATH = 'images/kodim01.png'
+IMAGE_PATH = 'images/kodim03.png'
 
 # Load image and detach it into pieces
 # image = np.random.randint(0, 256, (90, 90, 3), dtype=np.uint8)  # Replace this with image loading
-image = np.array(Image.open(IMAGE_PATH).resize((256, 256)), dtype=np.uint8)
+image = np.array(Image.open(IMAGE_PATH).resize((300, 300)), dtype=np.uint8)
 pieces = detach_image(image)
 
 def serve_pieces():

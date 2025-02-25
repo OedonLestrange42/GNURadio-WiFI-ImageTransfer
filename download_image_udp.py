@@ -24,7 +24,8 @@ def receive_pieces():
                 print(f"Received piece at position ({x}, {y}, {c})")
                 # Rebuild the image dynamically
                 reconstructed_image = redraw_image(piece, reconstructed_image)
-                cv2.imshow('Reconstructed Image', reconstructed_image)
+                img_bgr = cv2.cvtColor(reconstructed_image, cv2.COLOR_RGB2BGR)
+                cv2.imshow('Reconstructed Image', img_bgr)
                 cv2.waitKey(1)
             except (Exception, UnicodeDecodeError) as e:
                 print(f"An error occurred: {e}")
