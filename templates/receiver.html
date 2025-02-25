@@ -5,24 +5,48 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Image Receiver</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.2.0/socket.io.min.js"></script>
-    <script>
-        document.addEventListener("DOMContentLoaded", function() {
-            var socket = io.connect('http://' + document.domain + ':' + location.port);
-
-            socket.on('update_image', function(data) {
-                var img = document.getElementById('reconstructedImage');
-                img.src = 'data:image/jpeg;base64,' + data.image;
-            });
-        });
-    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
 </head>
+
 <body>
     <div class="container">
-        <h1>Reconstructed Image</h1>
-        <div id="imageContainer" class="image-preview-container">
-            <img id="reconstructedImage" src="" alt="Reconstructed Image">
+        <h1>Image Receiver</h1>
+        <div class="image-preview-container">
+            <img id="imagePreview" 
+                 style="width: 300px; height: 300px; object-fit: contain;" 
+                 src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                 alt="Reconstructed Image">
         </div>
+        <div class="button-group">
+            <button class="submit-btn" onclick="startReceiving()">Start Receiving</button>
+            <button class="stop-btn" onclick="stopReceiving()">Stop Receiving</button>
+        </div>
+        <div id="status"></div>
     </div>
+
+    <script>
+        const socket = io();
+        const status = document.getElementById('status');
+        const imagePreview = document.getElementById('imagePreview');
+        
+        socket.on('image_update', function(data) {
+            console.log('Received image update');
+            if (data && data.image) {
+                imagePreview.src = data.image;
+            }
+        });
+
+        function startReceiving() {
+            console.log('Starting receiver...');
+            status.textContent = 'Starting receiver...';
+            socket.emit('start_receiving');
+        }
+    
+        function stopReceiving() {
+            console.log('Stopping receiver...');
+            status.textContent = 'Stopping receiver...';
+            socket.emit('stop_receiving');
+        }
+    </script>
 </body>
 </html>

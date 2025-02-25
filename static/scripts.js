@@ -1,8 +1,8 @@
-document.addEventListener("DOMContentLoaded", function() {
-    var socket = io.connect('http://' + document.domain + ':' + location.port);
+document.addEventListener('DOMContentLoaded', (event) => {
+    const socket = io();
 
-    socket.on('update_image', function(data) {
-        var img = document.getElementById('reconstructedImage');
-        img.src = 'data:image/jpeg;base64,' + data.image;
+    socket.on('image_update', function(data) {
+        const imagePreview = document.getElementById('imagePreview');
+        imagePreview.src = data.image;
     });
 });
