@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Sender</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <script>
+        function previewImage(event) {
+            var reader = new FileReader();
+            reader.onload = function() {
+                var output = document.getElementById('imagePreview');
+                output.src = reader.result;
+                output.style.display = 'block';
+            }
+            reader.readAsDataURL(event.target.files[0]);
+        }
+
+        function sendImage(event) {
+            event.preventDefault();
+            var formData = new FormData(document.getElementById('imageForm'));
+            fetch('/send_image', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === "sending") {
+                    console.log("Image is being sent");
+                } else {
+                    console.error("Failed to send image");
+                }
+            });
+        }
+
+        function stopSending(event) {
+            event.preventDefault();
+            fetch('/stop', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === "stopped") {
+                    console.log("Stopped sending image");
+                } else {
+                    console.error("Failed to stop");
+                }
+            });
+        }
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>Send Image</h1>
+        <form id="imageForm" method="post" enctype="multipart/form-data" onsubmit="sendImage(event)">
+            <div class="form-group">
+                <label for="file">Choose target image:</label>
+                <input type="file" id="file" name="file" accept="image/*" onchange="previewImage(event)" required>
+            </div>
+            <div class="form-group">
+                <label for="port">Enter port:</label>
+                <input type="number" id="port" name="port" required>
+            </div>
+            <div class="image-preview-container">
+                <img id="imagePreview" style="display:none;" />
+            </div>
+            <div class="button-group">
+                <button type="submit" class="submit-btn">Send Image</button>
+                <button type="button" class="stop-btn" onclick="stopSending(event)">Stop</button>
+            </div>
+        </form>
+    </div>
+</body>
+</html>

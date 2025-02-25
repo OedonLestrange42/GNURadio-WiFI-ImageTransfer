@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Receiver</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.2.0/socket.io.min.js"></script>
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            var socket = io.connect('http://' + document.domain + ':' + location.port);
+
+            socket.on('update_image', function(data) {
+                var img = document.getElementById('reconstructedImage');
+                img.src = 'data:image/jpeg;base64,' + data.image;
+            });
+        });
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>Reconstructed Image</h1>
+        <div id="imageContainer" class="image-preview-container">
+            <img id="reconstructedImage" src="" alt="Reconstructed Image">
+        </div>
+    </div>
+</body>
+</html>
