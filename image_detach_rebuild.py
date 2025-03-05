@@ -14,7 +14,11 @@ def detach_image(image, piece_size=(30, 30)):
     list: A shuffled list of tuples where each tuple contains the piece and its original position.
     """
     height, width, channels = image.shape
-    assert channels == 3, "Image must have 3 channels (RGB)."
+    # assert height < piece_size[0] and width < piece_size[1], "Image is too small."
+    # assert channels == 3, "Image must have 3 channels (RGB)."
+    if height < piece_size[1] and width < piece_size[0]:
+        piece_size[1] = height
+        piece_size[0] = width
 
     pieces = []
     for y in range(0, height, piece_size[1]):
@@ -38,7 +42,11 @@ def rebuild_image(pieces, image_size, piece_size=(30, 30)):
     Returns:
     np.ndarray: The reconstructed image.
     """
-    # height, width, channels = image_size
+    height, width, channels = image_size
+    if height < piece_size[0] and width < piece_size[1]:
+        piece_size[0] = height
+        piece_size[1] = width
+
     reconstructed_image = np.zeros(image_size, dtype=np.uint8)
 
     for (y, x, c), piece in pieces:
@@ -47,6 +55,10 @@ def rebuild_image(pieces, image_size, piece_size=(30, 30)):
     return reconstructed_image
 
 def redraw_image(patch, reconstructed_image, piece_size=(30, 30)):
+    """
+
+    only available for standard img, not for feature maps.
+    """
     (y, x, c), piece = patch
 
     reconstructed_image[y:y + piece_size[1], x:x + piece_size[0], c:c + 1] = piece
