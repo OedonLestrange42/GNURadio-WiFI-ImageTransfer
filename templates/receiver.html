@@ -31,6 +31,25 @@
         const startBtn = document.querySelector('.submit-btn');
         const stopBtn = document.querySelector('.stop-btn');
         
+        // Add connection status handling
+        socket.on('connect', () => {
+            console.log('Connected to server');
+            status.textContent = 'Connected to server';
+            startBtn.disabled = false;
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Disconnected from server');
+            status.textContent = 'Disconnected from server';
+            startBtn.disabled = true;
+            stopBtn.classList.remove('active');
+        });
+
+        socket.on('status', function(data) {
+            console.log('Status update:', data.message);
+            status.textContent = data.message;
+        });
+        
         socket.on('image_update', function(data) {
             console.log('Received image update');
             if (data && data.image) {
@@ -42,6 +61,7 @@
             console.log('Starting receiver...');
             status.textContent = 'Starting receiver...';
             startBtn.disabled = true;
+            stopBtn.disabled = false;
             stopBtn.classList.add('active');
             socket.emit('start_receiving');
         }
@@ -50,6 +70,7 @@
             console.log('Stopping receiver...');
             status.textContent = 'Stopping receiver...';
             startBtn.disabled = false;
+            stopBtn.disabled = true;
             stopBtn.classList.remove('active');
             socket.emit('stop_receiving');
         }

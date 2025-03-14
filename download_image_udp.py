@@ -39,7 +39,7 @@ def receive_pieces():
                     
                 piece = pickle.loads(data)
                 (x, y, c), val = piece
-                # print(f"Received piece at position ({x}, {y}, {c})")
+                print(f"Received piece at position ({x}, {y}, {c})")
                 
                 reconstructed_image = redraw_image(piece, reconstructed_image)
                 
