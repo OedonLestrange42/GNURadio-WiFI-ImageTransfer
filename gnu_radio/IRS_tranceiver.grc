@@ -684,7 +684,7 @@ blocks:
     bus_structure: null
     coordinate: [1080, 1168.0]
     rotation: 0
-    state: enabled
+    state: disabled
 - name: channels_channel_model_0
   id: channels_channel_model
   parameters:
@@ -943,11 +943,11 @@ blocks:
 - name: epy_block_2
   id: epy_block
   parameters:
-    _source_code: "import pmt\nimport socket\nimport numpy as np\nimport pickle\n\
-      from gnuradio import gr\nfrom PIL import Image\n\n\nclass blk(gr.sync_block):\
+    _source_code: "import pdb\n\nimport pmt\nimport socket\nimport numpy as np\nimport\
+      \ pickle\nfrom gnuradio import gr\nfrom PIL import Image\n\n\nclass blk(gr.sync_block):\
       \  # other base classes are basic_block, decim_block, interp_block\n    def\
-      \ __init__(self,\n                 image_hight: int = 300,\n               \
-      \  image_width: int = 300):  # only default arguments here\n        gr.basic_block.__init__(\n\
+      \ __init__(self,\n                 image_hight: int = 240,\n               \
+      \  image_width: int = 240):  # only default arguments here\n        gr.basic_block.__init__(\n\
       \            self,\n            name='Extract Pics',  # will be shown in GRC\n\
       \            in_sig=None,\n            out_sig=None\n        )\n        self.message_port_register_in(pmt.intern('MAC'))\n\
       \        self.set_msg_handler(pmt.intern('MAC'), self.handle_msg)\n        self.skt\
@@ -955,12 +955,13 @@ blocks:
       \        self.W = image_width\n\n    def handle_msg(self, msg):\n        # This\
       \ is where you handle the message. You can access the data using pmt.to_python(msg).\n\
       \        # global patch_list\n        try:\n            data = pmt.to_python(msg)[-1]\n\
-      \            # print(data)\n            target = data[24:]  # loaded data\n\
-      \            pics = target[4:]\n            img = bytes(pics)\n            #\
-      \ img = pickle.dumps(pics)\n            self.skt.sendto(img, ('localhost', 10010))\n\
-      \        except UnicodeDecodeError as e:\n            print(f\"An error occurred:\
-      \ {e}\")\n            # pass\n        # print(f'msg received, current msg list\
-      \ length {len(patch_list)}')\n\n"
+      \            # print(len(data))\n            # pdb.set_trace()\n           \
+      \ target = data[24:]  # loaded data\n            pics = target[4:]\n       \
+      \     img = bytes(pics)\n            # img = pickle.dumps(pics)\n          \
+      \  self.skt.sendto(img, ('localhost', 10010))\n        except UnicodeDecodeError\
+      \ as e:\n            print(f\"An error occurred: {e}\")\n            # pass\n\
+      \        # print(f'msg received, current msg list length {len(patch_list)}')\n\
+      \n"
     affinity: ''
     alias: ''
     comment: ''
@@ -969,7 +970,7 @@ blocks:
     maxoutbuf: '0'
     minoutbuf: '0'
   states:
-    _io_cache: ('Extract Pics', 'blk', [('image_hight', '300'), ('image_width', '300')],
+    _io_cache: ('Extract Pics', 'blk', [('image_hight', '240'), ('image_width', '240')],
       [('MAC', 'message', 1)], [], '', [])
     bus_sink: false
     bus_source: false
@@ -1066,7 +1067,7 @@ blocks:
     bus_structure: null
     coordinate: [880, 1168.0]
     rotation: 0
-    state: enabled
+    state: disabled
 - name: ieee802_11_frame_equalizer_0
   id: ieee802_11_frame_equalizer
   parameters:
@@ -1168,7 +1169,7 @@ blocks:
     host: ''
     maxoutbuf: '0'
     minoutbuf: '0'
-    mtu: '10000'
+    mtu: '1024'
     port: '50010'
     tcp_no_delay: 'False'
     type: UDP_SERVER
@@ -1379,7 +1380,7 @@ blocks:
     bus_structure: null
     coordinate: [1296, 1144.0]
     rotation: 0
-    state: enabled
+    state: disabled
 - name: qtgui_sink_x_0
   id: qtgui_sink_x
   parameters:

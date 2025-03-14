@@ -1,8 +1,9 @@
 import numpy as np
 from sklearn.utils import shuffle
 
+PIECE_SIZE = (10, 10)
 
-def detach_image(image, piece_size=(30, 30)):
+def detach_image(image, piece_size=PIECE_SIZE):
     """
     Detach an RGB image into small parts and return them in a shuffled list.
 
@@ -30,7 +31,7 @@ def detach_image(image, piece_size=(30, 30)):
     shuffled_pieces = shuffle(pieces)
     return shuffled_pieces
 
-def rebuild_image(pieces, image_size, piece_size=(30, 30)):
+def rebuild_image(pieces, image_size, piece_size=PIECE_SIZE):
     """
     Rebuild the image from the detached pieces.
 
@@ -54,7 +55,7 @@ def rebuild_image(pieces, image_size, piece_size=(30, 30)):
 
     return reconstructed_image
 
-def redraw_image(patch, reconstructed_image, piece_size=(30, 30)):
+def redraw_image(patch, reconstructed_image, piece_size=PIECE_SIZE):
     """
 
     only available for standard img, not for feature maps.

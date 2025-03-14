@@ -18,14 +18,14 @@ import io
 HOST = 'localhost'
 PORT = 10010
 IMAGE_SIZE = (240, 240, 3)
-FEATURE_SIZE = (30, 30, 128)
+FEATURE_SIZE = (10, 10, 1)
 USER_ID = '3-4'  # default value
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
 socketio = SocketIO(app, cors_allowed_origins="*")
 stop_thread = False
-feature_map = np.zeros(FEATURE_SIZE, dtype=np.float32)
+feature_map = np.zeros((IMAGE_SIZE[0] // 8, IMAGE_SIZE[1] // 8, 128), dtype=np.float32)
 
 def receive_pieces():
     global stop_thread
@@ -42,20 +42,21 @@ def receive_pieces():
                 data, client_address = s.recvfrom(4096)
                 if not data:
                     continue
-                    
+                # print(len(data))
                 piece = pickle.loads(data)
+                # print(piece)
                 # pdb.set_trace()
                 (x, y, c), val = piece
                 piece_shape = val.shape
-                # print(f"Received piece at position ({x}, {y}, {c})")
+                print(f"Received piece at position ({x}, {y}, {c}), shape: {piece_shape}")
 
-                if piece_shape == (FEATURE_SIZE[0], FEATURE_SIZE[1], 1):
+                if piece_shape == FEATURE_SIZE:
                     # print("Received one pieces")
                     feature_map = redraw_image(piece, feature_map)
                     piece_count += 1
                 
-                # every 128 steps
-                if piece_count > 0 and piece_count % 128 == 0:
+                # every N steps
+                if piece_count > 0 and piece_count % 3 == 0:
                     print(f"Received {piece_count} pieces")
                     piece_count = 0
                     # pdb.set_trace()
@@ -97,13 +98,15 @@ def handle_start(data):
 @socketio.on('stop_receiving')
 def handle_stop():
     global stop_thread
+    global feature_map
+    # feature_map = np.zeros((IMAGE_SIZE[0] // 8, IMAGE_SIZE[1] // 8, 128), dtype=np.float32)
     print("Received stop signal")  # Debug log
     stop_thread = True
 
 if __name__ == "__main__":
     # img_size = (128, 128)
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    codec = JSCE(weight_path='codec/checkpoints/Rician-checkpoint_SOMA-DSCN_withIRS_optIRS_IRS-scale-8_AP-1_Usr-5_img-size-64_epoch400_20241216.pth',
+    codec = JSCE(weight_path='codec/checkpoints/Rician-checkpoint_SOMA-DSCN-exp-ver_noIRS_fixIRS_AP-1_Usr-5_img-size-128_epoch100_20250306.pth',
                  img_size=(IMAGE_SIZE[0], IMAGE_SIZE[1]),
                  compressed_channel=128,
                  device=device)

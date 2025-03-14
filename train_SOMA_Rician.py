@@ -364,8 +364,9 @@ def get_args():
     parser.add_argument('--drop-rate', '-d', metavar='DR', type=float, default=0.5, help='Drop rate for img transmission', dest='dr')
     parser.add_argument('--fix-lr', '-fx', metavar='fixLR', type=bool, default=False, help='Wether fix learning rate', dest='fix_lr')
     parser.add_argument('--load', '-f', type=str,
-                        default="codec/checkpoints/Rician-checkpoint_SOMA-DSCN_withIRS_optIRS_IRS-scale-8_AP-1_Usr-5_img-size-64_epoch400_20241216.pth",
+                        default="",
                         help='Load model from a .pth file')
+    # codec/checkpoints/Rician-checkpoint_SOMA-DSCN_withIRS_optIRS_IRS-scale-8_AP-1_Usr-5_img-size-64_epoch400_20241216.pth
     parser.add_argument('--validation', '-v', dest='val', type=float, default=10.0,
                         help='Percent of the data that is used as validation (0-100)')
     parser.add_argument('--amp', action='store_true', default=False, help='Use mixed precision')

@@ -75,8 +75,8 @@ blocks:
     label2: ''
     label3: ''
     label4: ''
-    labels: '[''  1 | 2320.0 | 11g'',''  2 | 2460.0 | 11g'', ''  3 | 2600.0 | 11g'',
-      ''  4 | 2740.0 | 11g'', ''  5 | 2880.0 | 11g'', ''  6 | 3020.0 | 11g'', ''  7
+    labels: '[''  1 | 4100.0 | 11g'',''  2 | 2472.0 | 11g'', ''  3 | 3100.0 | 11g'',
+      ''  4 | 2600.0 | 11g'', ''  5 | 2880.0 | 11g'', ''  6 | 3020.0 | 11g'', ''  7
       | 3160.0 | 11g'', ''  8 | 3300.0 | 11g'', ''  9 | 3440.0 | 11g'', ''  10 | 3580.0
       | 11g'', ''  11 | 3720.0 | 11g'', ''  12 | 3860.0 | 11g'']'
     num_opts: '0'
@@ -85,11 +85,11 @@ blocks:
     option2: '2'
     option3: '3'
     option4: '4'
-    options: "[2.32e+09, 2.46e+09, 2.60e+09, 2.74e+09, 2.88e+09, 3.02e+09,\n     \
-      \  3.16e+09, 3.30e+09, 3.44e+09, 3.58e+09, 3.72e+09, 3.86e+09]"
+    options: "[4.10e+09, 2.472e+09, 3.10e+09, 2.60e+09, 2.88e+09, 3.02e+09,\n    \
+      \   3.16e+09, 3.30e+09, 3.44e+09, 3.58e+09, 3.72e+09, 3.86e+09]"
     orient: Qt.QVBoxLayout
     type: real
-    value: '2600000000'
+    value: '2600000000.0'
     widget: combo_box
   states:
     bus_sink: false
@@ -308,7 +308,7 @@ blocks:
     mtu: '10000'
     port: '52001'
     tcp_no_delay: 'False'
-    type: TCP_SERVER
+    type: UDP_SERVER
   states:
     bus_sink: false
     bus_source: false
@@ -316,6 +316,35 @@ blocks:
     coordinate: [272, 252.0]
     rotation: 0
     state: enabled
+- name: qtgui_sink_x_0
+  id: qtgui_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    bw: samp_rate
+    comment: ''
+    fc: '0'
+    fftsize: '1024'
+    gui_hint: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    name: '""'
+    plotconst: 'True'
+    plotfreq: 'True'
+    plottime: 'True'
+    plotwaterfall: 'True'
+    rate: '10'
+    showports: 'False'
+    showrf: 'True'
+    type: complex
+    wintype: window.WIN_BLACKMAN_hARRIS
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [520, 704.0]
+    rotation: 0
+    state: true
 - name: soapy_hackrf_sink_0
   id: soapy_hackrf_sink
   parameters:
@@ -335,7 +364,7 @@ blocks:
     bus_structure: null
     coordinate: [520, 640.0]
     rotation: 0
-    state: true
+    state: enabled
 - name: uhd_usrp_sink_0
   id: uhd_usrp_sink
   parameters:
@@ -638,6 +667,7 @@ connections:
 - [blocks_message_strobe_0_0, strobe, ieee802_11_mac_0, app in]
 - [blocks_multiply_const_vxx_0, '0', foo_packet_pad2_0, '0']
 - [blocks_vector_source_x_0, '0', wifi_phy_hier_0_0, '0']
+- [foo_packet_pad2_0, '0', qtgui_sink_x_0, '0']
 - [foo_packet_pad2_0, '0', soapy_hackrf_sink_0, '0']
 - [foo_packet_pad2_0, '0', uhd_usrp_sink_0, '0']
 - [ieee802_11_mac_0, phy out, wifi_phy_hier_0_0, mac_in]
@@ -646,4 +676,4 @@ connections:
 
 metadata:
   file_format: 1
-  grc_version: 3.10.5.1
+  grc_version: 3.10.7.0

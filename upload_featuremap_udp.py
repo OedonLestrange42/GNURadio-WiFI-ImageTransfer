@@ -27,7 +27,7 @@ def send_image(image_path1, image_path2, port):
     global stop_flag
     original_image1 = Image.open(image_path1).convert('RGB')
     original_image2 = Image.open(image_path2).convert('RGB')
-    image_dict = {TARGET[0]: original_image1, TARGET[0]: original_image2}
+    image_dict = {TARGET[0]: original_image1, TARGET[1]: original_image2}
 
     img_latent = codec.img2msg(image_dict)
     pieces = detach_image(img_latent)
@@ -41,9 +41,9 @@ def send_image(image_path1, image_path2, port):
                 if stop_flag.is_set():
                     break
                 data = pickle.dumps(piece)
-                # message_size = struct.pack("=L", len(data))
+                message_size = struct.pack("=L", len(data))
                 # print(len(data))
-                s.sendto(data, (HOST, port))
+                s.sendto(message_size + data, (HOST, port))
                 time.sleep(0.05)
             print("loop accomplished")
 
@@ -76,7 +76,7 @@ def handle_stop():
 
 if __name__ == '__main__':
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    codec = JSCE(weight_path='codec/checkpoints/Rician-checkpoint_SOMA-DSCN_withIRS_optIRS_IRS-scale-8_AP-1_Usr-5_img-size-64_epoch400_20241216.pth',
+    codec = JSCE(weight_path='codec/checkpoints/Rician-checkpoint_SOMA-DSCN-exp-ver_noIRS_fixIRS_AP-1_Usr-5_img-size-128_epoch100_20250306.pth',
                  img_size=(IMAGE_SIZE[0], IMAGE_SIZE[1]),
                  compressed_channel=128,
                  device=device)
