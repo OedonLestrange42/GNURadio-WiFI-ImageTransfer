@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Featuremap Receiver</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+</head>
+
+<body>
+    <div class="container">
+        <h1>Featuremap Receiver</h1>
+        <div class="form-group">
+            <label for="userId">User ID:</label>
+            <input type="text" id="userId" value="{{ user_id }}" class="form-control">
+        </div>
+        <div class="image-preview-container">
+            <img id="imagePreview" 
+                 style="width: 280px; height: 280px; object-fit: contain;"
+                 src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                 alt="Reconstructed Featuremap">
+        </div>
+        <div class="button-group">
+            <button class="submit-btn" onclick="startReceiving()">Start Receiving</button>
+            <button class="stop-btn" onclick="stopReceiving()">Stop Receiving</button>
+        </div>
+        <div id="status"></div>
+    </div>
+
+    <script>
+        const socket = io();
+        const status = document.getElementById('status');
+        const imagePreview = document.getElementById('imagePreview');
+        const startBtn = document.querySelector('.submit-btn');
+        const stopBtn = document.querySelector('.stop-btn');
+        const userIdInput = document.getElementById('userId');
+        
+        socket.on('image_update', function(data) {
+            console.log('Received image update');
+            if (data && data.image) {
+                imagePreview.src = data.image;
+            }
+        });
+    
+        function startReceiving() {
+            console.log('Starting receiver...');
+            status.textContent = 'Starting receiver...';
+            startBtn.disabled = true;
+            stopBtn.classList.add('active');
+            socket.emit('start_receiving', {
+                user_id: userIdInput.value
+            });
+        }
+    
+        function stopReceiving() {
+            console.log('Stopping receiver...');
+            status.textContent = 'Stopping receiver...';
+            startBtn.disabled = false;
+            stopBtn.classList.remove('active');
+            socket.emit('stop_receiving');
+        }
+    </script>
+</body>
+</html>
