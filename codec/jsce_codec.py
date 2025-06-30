@@ -7,7 +7,6 @@ from einops import rearrange
 # import numpy as np
 from torchvision.transforms import ToPILImage
 from torch import nn
-from PIL import Image
 
 
 def denormalize(img):
