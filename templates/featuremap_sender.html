@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Sender</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <script>
+        function previewImage(event, previewId) {
+            var reader = new FileReader();
+            reader.onload = function() {
+                var output = document.getElementById(previewId);
+                output.src = reader.result;
+                output.style.display = 'block';
+            }
+            reader.readAsDataURL(event.target.files[0]);
+        }
+
+        function sendImages(event) {
+            event.preventDefault();
+            var formData = new FormData(document.getElementById('imageForm'));
+            var submitBtn = document.querySelector('.submit-btn');
+            var stopBtn = document.querySelector('.stop-btn');
+            
+            submitBtn.disabled = true;
+            stopBtn.classList.add('active');
+            
+            fetch('/send_image', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === "sending") {
+                    console.log("Images are being sent");
+                } else {
+                    console.error("Failed to send images");
+                    submitBtn.disabled = false;
+                    stopBtn.classList.remove('active');
+                }
+            });
+        }
+
+        function stopSending(event) {
+            event.preventDefault();
+            var submitBtn = document.querySelector('.submit-btn');
+            var stopBtn = document.querySelector('.stop-btn');
+            
+            fetch('/stop', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === "stopped") {
+                    console.log("Stopped sending images");
+                    submitBtn.disabled = false;
+                    stopBtn.classList.remove('active');
+                } else {
+                    console.error("Failed to stop");
+                }
+            });
+        }
+    </script>
+    <style>
+        .image-preview-container {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            margin: 20px 0;
+        }
+
+        .image-preview-container img {
+            max-width: 45%;
+            height: auto;
+            border-radius: 8px;
+            border: 1px solid #d1d1d6;
+            padding: 5px;
+        }
+
+        .preview-wrapper {
+            text-align: center;
+        }
+
+        .preview-label {
+            font-size: 14px;
+            color: #666;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Send Images</h1>
+        <form id="imageForm" method="post" enctype="multipart/form-data" onsubmit="sendImages(event)">
+            <div class="form-group">
+                <label for="file1">Choose first image:</label>
+                <input type="file" id="file1" name="file1" accept="image/*" onchange="previewImage(event, 'imagePreview1')" required>
+            </div>
+            <div class="form-group">
+                <label for="file2">Choose second image:</label>
+                <input type="file" id="file2" name="file2" accept="image/*" onchange="previewImage(event, 'imagePreview2')" required>
+            </div>
+            <div class="form-group">
+                <label for="port">Enter port:</label>
+                <input type="number" id="port" name="port" required>
+            </div>
+            <div class="image-preview-container">
+                <div class="preview-wrapper">
+                    <img id="imagePreview1" style="display:none;" />
+                    <div class="preview-label">Image 1</div>
+                </div>
+                <div class="preview-wrapper">
+                    <img id="imagePreview2" style="display:none;" />
+                    <div class="preview-label">Image 2</div>
+                </div>
+            </div>
+            <div class="button-group">
+                <button type="submit" class="submit-btn">Send Images</button>
+                <button type="button" class="stop-btn" onclick="stopSending(event)">Stop</button>
+            </div>
+        </form>
+    </div>
+</body>
+</html>

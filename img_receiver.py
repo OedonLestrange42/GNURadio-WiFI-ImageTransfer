@@ -1,3 +1,5 @@
+import pdb
+
 import pmt
 import socket
 import numpy as np
@@ -28,8 +30,10 @@ class blk(gr.sync_block):  # other base classes are basic_block, decim_block, in
         try:
             data = pmt.to_python(msg)[-1]
             # print(data)
+            # pdb.set_trace()
             target = data[24:]  # loaded data
             pics = target[4:]
+            
             img = bytes(pics)
             # img = pickle.dumps(pics)
             self.skt.sendto(img, ('localhost', 10010))

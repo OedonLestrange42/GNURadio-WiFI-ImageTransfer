@@ -74,7 +74,7 @@ blocks:
     label2: ''
     label3: ''
     label4: ''
-    labels: '[''  1 | 2412.0 | 11g'', ''  2 | 2417.0 | 11g'', ''  3 | 2422.0 | 11g'',
+    labels: '[''  1 | 3100.0 | 11g'', ''  2 | 2600.0 | 11g'', ''  3 | 4100.0 | 11g'',
       ''  4 | 2427.0 | 11g'', ''  5 | 2432.0 | 11g'', ''  6 | 2437.0 | 11g'', ''  7
       | 2442.0 | 11g'', ''  8 | 2447.0 | 11g'', ''  9 | 2452.0 | 11g'', '' 10 | 2457.0
       | 11g'', '' 11 | 2462.0 | 11g'', '' 12 | 2467.0 | 11g'', '' 13 | 2472.0 | 11g'',
@@ -101,7 +101,7 @@ blocks:
     option2: '2'
     option3: '3'
     option4: '4'
-    options: '[2412000000.0, 2417000000.0, 2422000000.0, 2427000000.0, 2432000000.0,
+    options: '[3100000000.0, 2600000000.0, 4100000000.0, 2427000000.0, 2432000000.0,
       2437000000.0, 2442000000.0, 2447000000.0, 2452000000.0, 2457000000.0, 2462000000.0,
       2467000000.0, 2472000000.0, 2484000000.0, 5170000000.0, 5180000000.0, 5190000000.0,
       5200000000.0, 5210000000.0, 5220000000.0, 5230000000.0, 5240000000.0, 5250000000.0,
@@ -115,7 +115,7 @@ blocks:
       5910000000.0, 5920000000.0]'
     orient: Qt.QVBoxLayout
     type: real
-    value: '2472000000'
+    value: '2600000000'
     widget: combo_box
   states:
     bus_sink: false
@@ -273,7 +273,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [704, 408.0]
+    coordinate: [728, 416.0]
     rotation: 0
     state: enabled
 - name: blocks_delay_0
@@ -286,6 +286,7 @@ blocks:
     maxoutbuf: '0'
     minoutbuf: '0'
     num_ports: '1'
+    showports: 'False'
     type: complex
     vlen: '1'
   states:
@@ -305,6 +306,7 @@ blocks:
     maxoutbuf: '0'
     minoutbuf: '0'
     num_ports: '1'
+    showports: 'False'
     type: complex
     vlen: '1'
   states:
@@ -339,13 +341,14 @@ blocks:
     alias: ''
     comment: ''
     en_uvec: 'False'
+    log_level: info
   states:
     bus_sink: false
     bus_source: false
     bus_structure: null
     coordinate: [1040, 1112.0]
     rotation: 0
-    state: true
+    state: disabled
 - name: blocks_moving_average_xx_0
   id: blocks_moving_average_xx
   parameters:
@@ -439,7 +442,7 @@ blocks:
     bus_structure: null
     coordinate: [1080, 848.0]
     rotation: 0
-    state: enabled
+    state: disabled
 - name: digital_probe_mpsk_snr_est_c_0
   id: digital_probe_mpsk_snr_est_c
   parameters:
@@ -557,35 +560,38 @@ blocks:
     bus_structure: null
     coordinate: [1032, 884.0]
     rotation: 180
-    state: enabled
+    state: disabled
 - name: epy_block_2
   id: epy_block
   parameters:
-    _source_code: "import pmt\nimport numpy as np\nimport pickle\nfrom gnuradio import\
-      \ gr\nfrom PIL import Image\n\nclass blk(gr.basic_block):  # other base classes\
-      \ are basic_block, decim_block, interp_block\n    def __init__(self,\n     \
-      \            image_hight:int=15,\n                 image_width:int=15):  # only\
-      \ default arguments here\n        gr.basic_block.__init__(\n            self,\n\
-      \            name='Extract Pics',   # will be shown in GRC\n            in_sig=None,\n\
-      \            out_sig=None\n        )\n        self.message_port_register_in(pmt.intern('MAC'))\n\
-      \        self.set_msg_handler(pmt.intern('MAC'), self.handle_msg)\n        self.H\
-      \ = image_hight\n        self.W = image_width\n\n    def handle_msg(self, msg):\n\
-      \        # This is where you handle the message. You can access the data using\
-      \ pmt.to_python(msg).\n        data = pmt.to_python(msg)[-1]\n        target\
-      \ = data[24:]  # loaded data\n        pics = target[4:]\n        \n        img\
-      \ = bytes(pics)\n        img = pickle.loads(img)\n        img.save('/home/oedon/\u684C\
-      \u9762/RX.jpg')\n        \n        print(len(pics))\n\n    def work(self, input_items,\
-      \ output_items):\n        # This is where you handle the stream data.\n    \
-      \    # print(input_items[0])\n        return True\n"
+    _source_code: "import pdb\n\nimport pmt\nimport socket\nimport numpy as np\nimport\
+      \ pickle\nfrom gnuradio import gr\nfrom PIL import Image\n\n\nclass blk(gr.sync_block):\
+      \  # other base classes are basic_block, decim_block, interp_block\n    def\
+      \ __init__(self,\n                 image_hight: int = 240,\n               \
+      \  image_width: int = 240):  # only default arguments here\n        gr.basic_block.__init__(\n\
+      \            self,\n            name='Extract Pics',  # will be shown in GRC\n\
+      \            in_sig=None,\n            out_sig=None\n        )\n        self.message_port_register_in(pmt.intern('MAC'))\n\
+      \        self.set_msg_handler(pmt.intern('MAC'), self.handle_msg)\n        self.skt\
+      \ = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n        self.H = image_hight\n\
+      \        self.W = image_width\n\n    def handle_msg(self, msg):\n        # This\
+      \ is where you handle the message. You can access the data using pmt.to_python(msg).\n\
+      \        # global patch_list\n        try:\n            data = pmt.to_python(msg)[-1]\n\
+      \            # print(len(data))\n            # pdb.set_trace()\n           \
+      \ target = data[24:]  # loaded data\n            pics = target[4:]\n       \
+      \     img = bytes(pics)\n            # img = pickle.dumps(pics)\n          \
+      \  self.skt.sendto(img, ('localhost', 10010))\n        except UnicodeDecodeError\
+      \ as e:\n            print(f\"An error occurred: {e}\")\n            # pass\n\
+      \        # print(f'msg received, current msg list length {len(patch_list)}')\n\
+      \n"
     affinity: ''
     alias: ''
     comment: ''
-    image_hight: '15'
-    image_width: '15'
+    image_hight: '240'
+    image_width: '240'
     maxoutbuf: '0'
     minoutbuf: '0'
   states:
-    _io_cache: ('Extract Pics', 'blk', [('image_hight', '15'), ('image_width', '15')],
+    _io_cache: ('Extract Pics', 'blk', [('image_hight', '240'), ('image_width', '240')],
       [('MAC', 'message', 1)], [], '', [])
     bus_sink: false
     bus_source: false
@@ -645,7 +651,7 @@ blocks:
     bus_structure: null
     coordinate: [896, 848.0]
     rotation: 0
-    state: enabled
+    state: disabled
 - name: ieee802_11_frame_equalizer_0
   id: ieee802_11_frame_equalizer
   parameters:
@@ -918,9 +924,9 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1256, 820.0]
+    coordinate: [1296, 824.0]
     rotation: 0
-    state: enabled
+    state: disabled
 - name: qtgui_time_sink_x_0
   id: qtgui_time_sink_x
   parameters:
@@ -1046,7 +1052,7 @@ blocks:
   parameters:
     affinity: ''
     alias: ''
-    ant0: ''
+    ant0: '"TX/RX"'
     ant1: ''
     ant10: ''
     ant11: ''
@@ -1078,7 +1084,7 @@ blocks:
     ant7: ''
     ant8: ''
     ant9: ''
-    bw0: '0'
+    bw0: '500000'
     bw1: '0'
     bw10: '0'
     bw11: '0'
@@ -1474,7 +1480,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [216, 212.0]
+    coordinate: [216, 184.0]
     rotation: 0
     state: enabled
 - name: virtual_sink_0
@@ -1624,4 +1630,4 @@ connections:
 
 metadata:
   file_format: 1
-  grc_version: 3.10.5.1
+  grc_version: 3.10.7.0
