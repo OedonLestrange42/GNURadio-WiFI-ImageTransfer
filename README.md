@@ -1,4 +1,4 @@
-# SDR-based Image Transmission Project using GNU Radio
+# SDR-based JSCE Image Transmission using GNU Radio
 
 This project demonstrates image transmission and reception using Software Defined Radios (SDRs) and GNU Radio, leveraging the IEEE 802.11 PHY layer implementation. It includes functionalities for both standard single-image transmission and a specialized mode for transmitting fused images, intended as supplementary material related to the JSCE research paper.
 
