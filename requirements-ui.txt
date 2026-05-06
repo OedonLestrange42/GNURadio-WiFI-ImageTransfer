@@ -1,0 +1,8 @@
+flask
+flask-socketio
+python-socketio
+python-engineio
+numpy
+pillow
+scikit-learn
+

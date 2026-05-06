@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Transfer (TX/RX)</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+</head>
+<body class="transfer-app">
+<div class="container">
+    <h1 class="page-title">Image Transfer (TX / RX)</h1>
+
+    <div class="split">
+        <!-- TX -->
+        <div class="panel">
+            <h2>TX (left): multi links + multi images</h2>
+
+            <form id="txForm" method="post" enctype="multipart/form-data">
+
+                <div class="row">
+                    <div class="form-group">
+                        <label for="port">UDP port:</label>
+                        <input type="number" id="port" name="port" value="{{ default_port }}">
+                    </div>
+                    <div class="form-group">
+                        <label>Selected CSI list:</label>
+                        <input type="text" id="csiText" value="{{ selected_csis | join(', ') }}" disabled>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="form-group">
+                        <label for="packet_loss_pct">Extra packet loss (%):</label>
+                        <input type="number" id="packet_loss_pct" name="packet_loss_pct" value="0" min="0" max="90" step="1">
+                        <div class="hint">Added on top of distance-based loss on the canvas (block → zeros at receiver).</div>
+                    </div>
+                    <div class="form-group">
+                        <label for="piece_delay_ms">Piece send interval (ms):</label>
+                        <input type="number" id="piece_delay_ms" name="piece_delay_ms" value="25" min="5" max="200" step="1">
+                        <div class="hint">Larger values make UDP chunk-by-chunk rebuild easier to see.</div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Images (one per CSI):</label>
+                    <div id="txList"></div>
+                    <div class="hint">
+                        Tip: after you create a link on the canvas, it will appear here as CSI (e.g. 13-14).
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="tx-neural-label">
+                        <input type="checkbox" name="neural_bypass" value="1">
+                        Bypass GNU Radio — JSCE encode/decode on server (no UDP TX)
+                    </label>
+                    <div class="hint">For debugging: merged latent with the same codec as the featuremap scripts; RX panels update without starting the UDP receiver.</div>
+                </div>
+
+                <div class="button-group">
+                    <button type="submit" class="submit-btn" id="txSendBtn">Send</button>
+                    <button type="button" class="stop-btn" id="txStopBtn" onclick="stopSend(event)">Stop</button>
+                </div>
+            </form>
+
+            <div class="statusline" id="txStatus"></div>
+
+            <div id="canvasWrap">
+                <canvas id="netCanvas"></canvas>
+                <div class="hint">
+                    Click a node then click another node to create/select a link. Drag nodes to change distance.
+                    Each link is recorded as a CSI string like "13-14". You can add multiple links.
+                </div>
+                <div class="statusline" id="csiStatus"></div>
+            </div>
+        </div>
+
+        <!-- RX -->
+        <div class="panel">
+            <h2>RX (right): decoded images per CSI</h2>
+
+            <div class="image-preview-container">
+                <div id="rxGrid"></div>
+            </div>
+
+            <div class="button-group">
+                <button class="submit-btn" id="rxStartBtn" onclick="startReceiving()">Start Receiving</button>
+                <button class="stop-btn" id="rxStopBtn" onclick="stopReceiving()">Stop Receiving</button>
+            </div>
+
+            <div class="statusline" id="rxStatus"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const socket = io();
+
+    const txStatus = document.getElementById('txStatus');
+    const rxStatus = document.getElementById('rxStatus');
+    const csiStatus = document.getElementById('csiStatus');
+    const rxGrid = document.getElementById('rxGrid');
+    const csiText = document.getElementById('csiText');
+    const txList = document.getElementById('txList');
+
+    const txSendBtn = document.getElementById('txSendBtn');
+    const txStopBtn = document.getElementById('txStopBtn');
+
+    const rxStartBtn = document.getElementById('rxStartBtn');
+    const rxStopBtn = document.getElementById('rxStopBtn');
+
+    // ----- RX socket handlers -----
+    socket.on('connect', () => {
+        rxStatus.textContent = 'Connected';
+        rxStartBtn.disabled = false;
+    });
+    socket.on('disconnect', () => {
+        rxStatus.textContent = 'Disconnected';
+        rxStartBtn.disabled = true;
+        rxStopBtn.classList.remove('active');
+    });
+    socket.on('status', (data) => {
+        if (data && data.message) rxStatus.textContent = data.message;
+    });
+    socket.on('image_update', (data) => {
+        if (!data || !data.image) return;
+        const csi = (data.csi || 'default').toString();
+        upsertRxCard(csi, data.image);
+    });
+    socket.on('rx_reset', (data) => {
+        const csis = data && data.csis;
+        if (!Array.isArray(csis)) return;
+        const ph = placeholderPixel();
+        csis.forEach((csiKey) => {
+            const csi = (csiKey || '').toString();
+            upsertRxCard(csi, ph);
+        });
+    });
+    socket.on('tx_status', (data) => {
+        if (data && data.message) txStatus.textContent = data.message;
+    });
+
+    function placeholderPixel() {
+        return "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+    }
+
+    const selectedCsisSet = new Set({{ selected_csis | tojson }});
+
+    function applyTxFilePreview(fileInput, thumbImg, thumbWrap) {
+        const f = fileInput.files && fileInput.files[0];
+        if (!f || !f.type.startsWith('image/')) {
+            thumbImg.src = '';
+            thumbImg.classList.remove('is-visible');
+            thumbWrap.classList.remove('has-image');
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+            thumbImg.src = reader.result;
+            thumbImg.classList.add('is-visible');
+            thumbWrap.classList.add('has-image');
+        };
+        reader.readAsDataURL(f);
+    }
+
+    function renderTxList() {
+        const csis = Array.from(selectedCsisSet);
+        csiText.value = csis.join(', ');
+
+        txList.innerHTML = '';
+        csis.forEach((csi, idx) => {
+            const row = document.createElement('div');
+            row.className = 'tx-link-row';
+
+            const lab = document.createElement('div');
+            lab.className = 'tx-csi-badge';
+            lab.title = csi;
+            lab.textContent = csi;
+
+            const fileCell = document.createElement('div');
+            fileCell.className = 'tx-file-cell';
+
+            const file = document.createElement('input');
+            file.type = 'file';
+            file.accept = 'image/*';
+            file.name = `file_${idx}`;
+            file.required = true;
+
+            const thumbWrap = document.createElement('div');
+            thumbWrap.className = 'tx-thumb-wrap';
+            const thumbImg = document.createElement('img');
+            thumbImg.className = 'tx-thumb';
+            thumbImg.alt = 'Selected preview';
+            const thumbPh = document.createElement('div');
+            thumbPh.className = 'tx-thumb-placeholder';
+            thumbPh.textContent = 'Preview';
+            thumbWrap.appendChild(thumbImg);
+            thumbWrap.appendChild(thumbPh);
+
+            file.addEventListener('change', () => applyTxFilePreview(file, thumbImg, thumbWrap));
+
+            fileCell.appendChild(file);
+
+            const hidden = document.createElement('input');
+            hidden.type = 'hidden';
+            hidden.name = `csi_${idx}`;
+            hidden.value = csi;
+
+            const del = document.createElement('button');
+            del.type = 'button';
+            del.className = 'stop-btn active tx-remove-btn';
+            del.textContent = 'Remove';
+            del.onclick = () => {
+                selectedCsisSet.delete(csi);
+                emitCanvasState();
+                renderTxList();
+                renderRxGrid();
+            };
+
+            row.appendChild(lab);
+            row.appendChild(fileCell);
+            row.appendChild(thumbWrap);
+            row.appendChild(del);
+            txList.appendChild(row);
+            txList.appendChild(hidden);
+        });
+    }
+
+    function renderRxGrid() {
+        const csis = Array.from(selectedCsisSet);
+        // keep existing cards if present; ensure placeholder exists
+        csis.forEach(csi => upsertRxCard(csi, null));
+        // remove cards that are no longer selected
+        Array.from(rxGrid.querySelectorAll('.rxCard')).forEach(card => {
+            const id = card.getAttribute('data-csi');
+            if (id && !selectedCsisSet.has(id)) card.remove();
+        });
+    }
+
+    function upsertRxCard(csi, imgDataUrl) {
+        let card = rxGrid.querySelector(`.rxCard[data-csi="${cssEscape(csi)}"]`);
+        if (!card) {
+            card = document.createElement('div');
+            card.className = 'rxCard';
+            card.setAttribute('data-csi', csi);
+
+            const header = document.createElement('div');
+            header.className = 'rxCardHeader';
+            const title = document.createElement('div');
+            title.textContent = csi;
+
+            const focus = document.createElement('button');
+            focus.type = 'button';
+            focus.className = 'submit-btn rx-focus-btn';
+            focus.textContent = 'Focus';
+            focus.onclick = () => {
+                // move card to top for quick inspection
+                rxGrid.prepend(card);
+            };
+
+            header.appendChild(title);
+            header.appendChild(focus);
+
+            const img = document.createElement('img');
+            img.className = 'rxImg';
+            img.src = placeholderPixel();
+            img.alt = `Decoded ${csi}`;
+
+            card.appendChild(header);
+            card.appendChild(img);
+            rxGrid.appendChild(card);
+        }
+        if (imgDataUrl) {
+            const img = card.querySelector('img');
+            img.src = imgDataUrl;
+        }
+    }
+
+    function cssEscape(s) {
+        return (s || '').toString().replace(/"/g, '\\"');
+    }
+
+    document.getElementById('txForm').addEventListener('submit', (event) => {
+        event.preventDefault();
+        const formData = new FormData(document.getElementById('txForm'));
+        txSendBtn.disabled = true;
+        txStopBtn.classList.add('active');
+        fetch('/send_image', { method: 'POST', body: formData })
+            .then(r => r.json())
+            .then(data => {
+                if (!data || data.status !== 'sending') {
+                    txStatus.textContent = 'TX error';
+                    txSendBtn.disabled = false;
+                    txStopBtn.classList.remove('active');
+                }
+            })
+            .catch(() => {
+                txStatus.textContent = 'TX error';
+                txSendBtn.disabled = false;
+                txStopBtn.classList.remove('active');
+            });
+    });
+
+    function stopSend(event) {
+        event.preventDefault();
+        fetch('/stop_send', { method: 'POST' })
+            .then(r => r.json())
+            .then(() => {
+                txSendBtn.disabled = false;
+                txStopBtn.classList.remove('active');
+            });
+    }
+
+    function startReceiving() {
+        rxStatus.textContent = 'Starting receiver...';
+        rxStartBtn.disabled = true;
+        rxStopBtn.disabled = false;
+        rxStopBtn.classList.add('active');
+        socket.emit('start_receiving');
+    }
+
+    function stopReceiving() {
+        rxStatus.textContent = 'Stopping receiver...';
+        rxStartBtn.disabled = false;
+        rxStopBtn.disabled = true;
+        rxStopBtn.classList.remove('active');
+        socket.emit('stop_receiving');
+    }
+
+    // ----- Canvas -----
+    const canvas = document.getElementById('netCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // scale canvas for crisp lines
+    function resizeCanvas() {
+        const dpr = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = Math.floor(rect.width * dpr);
+        canvas.height = Math.floor(rect.height * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        draw();
+    }
+
+    let nodes = {{ nodes | tojson }};
+    let channelStates = {{ channel_states | tojson }};
+
+    let dragId = null;
+    let dragOff = {x: 0, y: 0};
+    let pendingSrc = null;
+
+    function hitNode(mx, my) {
+        const r = 16;
+        for (let i = nodes.length - 1; i >= 0; i--) {
+            const n = nodes[i];
+            const dx = mx - n.x, dy = my - n.y;
+            if (dx*dx + dy*dy <= r*r) return n;
+        }
+        return null;
+    }
+
+    function draw() {
+        const rect = canvas.getBoundingClientRect();
+        ctx.clearRect(0, 0, rect.width, rect.height);
+
+        // background grid
+        ctx.save();
+        ctx.globalAlpha = 0.06;
+        ctx.strokeStyle = '#000';
+        for (let x = 0; x < rect.width; x += 24) {
+            ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, rect.height); ctx.stroke();
+        }
+        for (let y = 0; y < rect.height; y += 24) {
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(rect.width, y); ctx.stroke();
+        }
+        ctx.restore();
+
+        // selected links
+        ctx.save();
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = '#007aff';
+        for (const csi of Array.from(selectedCsisSet)) {
+            const parts = csi.split('-');
+            if (parts.length !== 2) continue;
+            const src = nodes.find(n => n.id === parts[0]);
+            const dst = nodes.find(n => n.id === parts[1]);
+            if (!src || !dst) continue;
+            ctx.beginPath();
+            ctx.moveTo(src.x, src.y);
+            ctx.lineTo(dst.x, dst.y);
+            ctx.stroke();
+        }
+        ctx.restore();
+
+        // nodes
+        for (const n of nodes) {
+            const isSrc = pendingSrc === n.id;
+            ctx.save();
+            ctx.fillStyle = isSrc ? '#34c759' : '#1c1c1e';
+            ctx.globalAlpha = isSrc ? 0.95 : 0.85;
+            ctx.beginPath();
+            ctx.arc(n.x, n.y, 16, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+
+            ctx.save();
+            ctx.fillStyle = '#fff';
+            ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(n.label || n.id, n.x, n.y);
+            ctx.restore();
+        }
+
+        // show a compact CSI summary (first 2)
+        const csis = Array.from(selectedCsisSet);
+        const info = csis.slice(0, 2).map(csi => {
+            const st = channelStates && channelStates[csi];
+            if (!st) return `${csi}`;
+            return `${csi} (SNR ${Number(st.snr_db).toFixed(1)}dB, drop ${Math.round(Number(st.drop_prob)*100)}%)`;
+        });
+        csiStatus.textContent = info.length ? info.join(' | ') : 'No link selected';
+    }
+
+    function emitCanvasState() {
+        socket.emit('canvas_update', { nodes: nodes, selected_csis: Array.from(selectedCsisSet) });
+    }
+
+    /** True if server CSI list matches current links (order-independent). Avoids re-building TX rows on Send. */
+    function csiListMatchesSelectedSet(list) {
+        if (!list || !Array.isArray(list)) return false;
+        const incoming = new Set(list.map((x) => String(x)));
+        if (incoming.size !== selectedCsisSet.size) return false;
+        for (const x of incoming) {
+            if (!selectedCsisSet.has(x)) return false;
+        }
+        return true;
+    }
+
+    socket.on('canvas_state', (data) => {
+        if (data && data.nodes) nodes = data.nodes;
+        if (data && data.selected_csis) {
+            if (!csiListMatchesSelectedSet(data.selected_csis)) {
+                selectedCsisSet.clear();
+                data.selected_csis.forEach((x) => selectedCsisSet.add(x.toString()));
+                renderTxList();
+                renderRxGrid();
+            }
+        }
+        if (data && data.channel_states) channelStates = data.channel_states;
+        draw();
+    });
+
+    function getMousePos(evt) {
+        const rect = canvas.getBoundingClientRect();
+        const x = (evt.clientX - rect.left);
+        const y = (evt.clientY - rect.top);
+        return {x, y};
+    }
+
+    canvas.addEventListener('pointerdown', (evt) => {
+        const {x, y} = getMousePos(evt);
+        const n = hitNode(x, y);
+        if (!n) return;
+
+        // if dragging (left button), start drag
+        dragId = n.id;
+        dragOff = {x: x - n.x, y: y - n.y};
+        canvas.setPointerCapture(evt.pointerId);
+    });
+
+    canvas.addEventListener('pointermove', (evt) => {
+        if (!dragId) return;
+        const {x, y} = getMousePos(evt);
+        const n = nodes.find(nn => nn.id === dragId);
+        if (!n) return;
+        n.x = Math.max(16, Math.min(canvas.getBoundingClientRect().width - 16, x - dragOff.x));
+        n.y = Math.max(16, Math.min(canvas.getBoundingClientRect().height - 16, y - dragOff.y));
+        draw();
+    });
+
+    canvas.addEventListener('pointerup', (evt) => {
+        if (!dragId) return;
+        dragId = null;
+        emitCanvasState();
+    });
+
+    canvas.addEventListener('click', (evt) => {
+        const {x, y} = getMousePos(evt);
+        const n = hitNode(x, y);
+        if (!n) return;
+
+        if (!pendingSrc) {
+            pendingSrc = n.id;
+            draw();
+            return;
+        }
+        if (pendingSrc && pendingSrc !== n.id) {
+            const csi = `${pendingSrc}-${n.id}`;
+            selectedCsisSet.add(csi);
+            pendingSrc = null;
+            emitCanvasState();
+            renderTxList();
+            renderRxGrid();
+            draw();
+        } else {
+            pendingSrc = null;
+            draw();
+        }
+    });
+
+    window.addEventListener('resize', resizeCanvas);
+    renderTxList();
+    renderRxGrid();
+    resizeCanvas();
+</script>
+</body>
+</html>
+

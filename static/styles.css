@@ -6,8 +6,277 @@ body {
     display: flex;
     justify-content: center;
     align-items: center;
-    height: 100vh;
+    min-height: 100vh;
     color: #333;
+    box-sizing: border-box;
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+/* Full-page transfer UI: scroll instead of clipping tall content */
+body.transfer-app {
+    align-items: flex-start;
+    padding: 20px 16px 32px;
+    height: auto;
+    min-height: 100vh;
+}
+
+.transfer-app .container {
+    max-width: 1100px;
+    width: min(1100px, 100%);
+    margin: 0 auto;
+    background-color: #ffffff;
+    padding: 28px 28px 36px;
+    border-radius: 18px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+    text-align: left;
+}
+
+.transfer-app .page-title {
+    text-align: center;
+    margin: 0 0 24px;
+    font-size: 1.5rem;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    color: #1c1c1e;
+}
+
+.transfer-app .split {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 20px;
+    align-items: start;
+}
+
+.transfer-app .panel {
+    background: #fafafa;
+    border: 1px solid #e8e8ed;
+    border-radius: 14px;
+    padding: 18px;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.transfer-app .panel h2 {
+    margin: 0 0 14px 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: #1c1c1e;
+}
+
+.transfer-app .row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    min-width: 0;
+}
+
+.transfer-app .row > * {
+    flex: 1 1 140px;
+    min-width: 0;
+}
+
+.transfer-app .statusline {
+    font-size: 13px;
+    color: #444;
+    margin-top: 10px;
+    min-height: 20px;
+    word-break: break-word;
+}
+
+.transfer-app #rxGrid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    min-width: 0;
+}
+
+.transfer-app .rxCard {
+    background: #fff;
+    border: 1px solid #d1d1d6;
+    border-radius: 12px;
+    overflow: hidden;
+    min-width: 0;
+}
+
+.transfer-app .rxCardHeader {
+    padding: 8px 10px;
+    font-size: 12px;
+    color: #1c1c1e;
+    background: #f5f5f7;
+    border-bottom: 1px solid #e5e5ea;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+}
+
+.transfer-app .rxCardHeader > div:first-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.transfer-app .rxImg {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: contain;
+    display: block;
+    background: repeating-conic-gradient(#f2f2f7 0% 25%, #fff 0% 50%) 50% / 16px 16px;
+}
+
+.transfer-app .rx-focus-btn {
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+.transfer-app #canvasWrap {
+    margin-top: 14px;
+}
+
+.transfer-app #netCanvas {
+    width: 100%;
+    max-width: 100%;
+    height: 320px;
+    border-radius: 12px;
+    border: 1px solid #d1d1d6;
+    background: #ffffff;
+    touch-action: none;
+    display: block;
+}
+
+.transfer-app .hint {
+    font-size: 12px;
+    color: #636366;
+    margin-top: 10px;
+    line-height: 1.45;
+}
+
+.transfer-app .tx-link-row {
+    display: grid;
+    grid-template-columns: minmax(0, 92px) minmax(0, 1fr) 76px auto;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 12px;
+    min-width: 0;
+}
+
+.transfer-app .tx-csi-badge {
+    font-size: 12px;
+    font-weight: 600;
+    color: #1c1c1e;
+    padding: 6px 8px;
+    background: #e8f1ff;
+    border-radius: 8px;
+    border: 1px solid #cce0ff;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.transfer-app .tx-file-cell {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.transfer-app .tx-file-cell input[type="file"] {
+    width: 100%;
+    max-width: 100%;
+    padding: 8px 10px;
+    font-size: 13px;
+}
+
+.transfer-app .tx-thumb-wrap {
+    width: 76px;
+    height: 76px;
+    border-radius: 10px;
+    border: 1px solid #d1d1d6;
+    background: repeating-conic-gradient(#f2f2f7 0% 25%, #fff 0% 50%) 50% / 12px 12px;
+    overflow: hidden;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.transfer-app .tx-thumb {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: none;
+}
+
+.transfer-app .tx-thumb.is-visible {
+    display: block;
+}
+
+.transfer-app .tx-thumb-placeholder {
+    font-size: 10px;
+    color: #8e8e93;
+    text-align: center;
+    padding: 6px;
+    line-height: 1.25;
+}
+
+.transfer-app .tx-thumb-wrap.has-image .tx-thumb-placeholder {
+    display: none;
+}
+
+.transfer-app .button-group {
+    margin-top: 6px;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.transfer-app .button-group .submit-btn,
+.transfer-app .button-group .stop-btn {
+    flex: 1 1 120px;
+}
+
+.transfer-app .image-preview-container {
+    margin-bottom: 16px;
+    min-width: 0;
+}
+
+@media (max-width: 960px) {
+    .transfer-app .split {
+        grid-template-columns: 1fr;
+    }
+    .transfer-app #rxGrid {
+        grid-template-columns: 1fr;
+    }
+    .transfer-app .tx-link-row {
+        grid-template-columns: 1fr 76px;
+        grid-template-areas:
+            "csi csi"
+            "file thumb"
+            "remove remove";
+    }
+    .transfer-app .tx-csi-badge {
+        grid-area: csi;
+    }
+    .transfer-app .tx-file-cell {
+        grid-area: file;
+    }
+    .transfer-app .tx-thumb-wrap {
+        grid-area: thumb;
+        justify-self: end;
+    }
+    .transfer-app .tx-remove-btn {
+        grid-area: remove;
+        justify-self: stretch;
+    }
 }
 
 .container {
@@ -54,6 +323,16 @@ input[type="number"] {
     border-radius: 8px;
     box-sizing: border-box;
     transition: border-color 0.2s;
+}
+
+.transfer-app input[type="text"]:disabled {
+    font-size: 13px;
+    padding: 10px 12px;
+}
+
+input[disabled] {
+    background: #f5f5f7;
+    color: #666;
 }
 
 input[type="file"]:focus,
