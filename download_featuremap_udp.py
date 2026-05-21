@@ -5,6 +5,7 @@ eventlet.monkey_patch()
 import torch
 import socket
 import pickle
+import struct
 import numpy as np
 from image_detach_rebuild import redraw_image
 from flask import Flask, render_template, Response
@@ -18,14 +19,25 @@ import io
 HOST = 'localhost'
 PORT = 10010
 IMAGE_SIZE = (240, 240, 3)
-FEATURE_SIZE = (10, 10, 1)
 USER_ID = '3-4'  # default value
+UDP_RECV_BUF = 65535
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
 socketio = SocketIO(app, cors_allowed_origins="*")
 stop_thread = False
 feature_map = np.zeros((IMAGE_SIZE[0] // 8, IMAGE_SIZE[1] // 8, 128), dtype=np.float32)
+
+def strip_length_prefix(data):
+    if len(data) < 4:
+        return data
+    try:
+        (payload_len,) = struct.unpack("=L", data[:4])
+    except struct.error:
+        return data
+    if payload_len == len(data) - 4:
+        return data[4:]
+    return data
 
 def receive_pieces():
     global stop_thread
@@ -39,21 +51,23 @@ def receive_pieces():
         
         while not stop_thread:
             try:
-                data, client_address = s.recvfrom(4096)
+                data, client_address = s.recvfrom(UDP_RECV_BUF)
                 if not data:
                     continue
                 # print(len(data))
-                piece = pickle.loads(data)
+                piece = pickle.loads(strip_length_prefix(data))
                 # print(piece)
                 # pdb.set_trace()
                 (x, y, c), val = piece
                 piece_shape = val.shape
                 print(f"Received piece at position ({x}, {y}, {c}), shape: {piece_shape}")
 
-                if piece_shape == FEATURE_SIZE:
-                    # print("Received one pieces")
+                # Accept any patch size selected by the sender. Edge patches can be smaller.
+                if len(piece_shape) == 3 and piece_shape[2] == 1:
                     feature_map = redraw_image(piece, feature_map)
                     piece_count += 1
+                else:
+                    print(f"Ignore unexpected piece shape: {piece_shape}")
                 
                 # every N steps
                 if piece_count > 0 and piece_count % 3 == 0:

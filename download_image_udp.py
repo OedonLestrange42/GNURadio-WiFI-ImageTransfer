@@ -10,7 +10,7 @@ import socket
 import pickle
 import struct
 import numpy as np
-from image_detach_rebuild import redraw_image
+from image_detach_rebuild import redraw_image, PATCH_PIECE_SIZE as NEURAL_BYPASS_PIECE_SIZE
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO
 from PIL import Image
@@ -162,16 +162,19 @@ def _compute_channel_state_for_csi(csi: str):
 def _apply_channel_effect(piece, csi: str):
     """
     Apply a lightweight, visually-obvious "channel" effect to a piece:
-    - random drop (piece replaced with zeros)
+    - random drop (piece not delivered — caller should skip update)
     - additive gaussian noise scaled by SNR
+
+    Drop is decided independently on each transmission attempt so the same
+    spatial patch is not permanently lost due to a fixed (y, x) seed.
+    Returns None when the piece is dropped.
     """
     (y, x, c), val = piece
 
     st = channel_states.get(csi) or {"snr_db": 25.0, "seed": 42, "drop_prob": 0.0}
-    rng = random.Random(int(st.get("seed", 42)) ^ (y << 16) ^ (x << 4) ^ (c << 1))
 
-    if rng.random() < float(st.get("drop_prob", 0.0)):
-        return ((y, x, c), np.zeros_like(val))
+    if random.random() < float(st.get("drop_prob", 0.0)):
+        return None
 
     snr_db = float(st.get("snr_db", 25.0))
     # signal assumed in [0,255]; noise sigma shrinks with SNR
@@ -313,20 +316,23 @@ def _stream_neural_decoded_pieces(
     Shuffled piece-by-piece reveal of one decoded view (mirrors UDP detach/rebuild + channel toy model).
     Runs in a thread when multiple links are active.
     """
-    from image_detach_rebuild import detach_image
+    from image_detach_rebuild import detach_image_patches
 
     csi = str(csi)
-    pieces = detach_image(decoded_rgb)
-    buf = np.zeros(IMAGE_SIZE, dtype=np.uint8)
-    reconstructed_images[csi] = buf
+    pieces = detach_image_patches(decoded_rgb, piece_size=NEURAL_BYPASS_PIECE_SIZE)
+    buf = reconstructed_images.get(csi)
+    if buf is None:
+        buf = np.zeros(IMAGE_SIZE, dtype=np.uint8)
+        reconstructed_images[csi] = buf
     for piece in pieces:
         if send_stop_flag.is_set():
             return
         if csi not in channel_states:
             _compute_channel_state_for_csi(csi)
         piece2 = _apply_channel_effect(piece, csi)
-        buf = redraw_image(piece2, buf)
-        reconstructed_images[csi] = buf
+        if piece2 is None:
+            continue
+        redraw_image(piece2, buf)
         delay = max(RX_PIECE_EMIT_DELAY_S, piece_delay_s)
         _emit_jpeg_piece_update(csi, buf, True, delay, sleep_fn)
 
@@ -415,6 +421,8 @@ def _send_image_worker(image_path: str, port: int, csi: str, piece_delay_s: floa
                     _compute_channel_state_for_csi(csi)
 
                 piece2 = _apply_channel_effect(piece, csi)
+                if piece2 is None:
+                    continue
                 payload = pickle.dumps({"csi": csi, "piece": piece2}, protocol=pickle.HIGHEST_PROTOCOL)
                 message_size = struct.pack("=L", len(payload))
                 s.sendto(message_size + payload, (HOST, int(port)))

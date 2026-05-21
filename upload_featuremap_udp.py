@@ -19,20 +19,26 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 HOST = 'localhost'
 IMAGE_SIZE = (240, 240, 3)
+DEFAULT_PATCH_SIZE = (10, 10)
 TARGET = ['3-4', '13-10']
 stop_flag = threading.Event()
 
 
-def send_image(image_path1, image_path2, port):
+def send_image(image_path1, image_path2, port, patch_size=DEFAULT_PATCH_SIZE):
     global stop_flag
     original_image1 = Image.open(image_path1).convert('RGB')
     original_image2 = Image.open(image_path2).convert('RGB')
     image_dict = {TARGET[0]: original_image1, TARGET[1]: original_image2}
 
     img_latent = codec.img2msg(image_dict)
-    pieces = detach_image(img_latent)
+    pieces = detach_image(img_latent, piece_size=patch_size)
     data = pickle.dumps(pieces[0])
-    print('Image to Pieces Accomplished. Each piece size:', len(data))
+    print(
+        'Image to Pieces Accomplished. Patch size:',
+        patch_size,
+        'First UDP payload size:',
+        len(data),
+    )
     # pdb.set_trace()
 
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
@@ -57,14 +63,23 @@ def handle_send_image():
     file1 = request.files['file1']
     file2 = request.files['file2']
     port = request.form['port']
+    patch_height = request.form.get('patch_height', DEFAULT_PATCH_SIZE[0])
+    patch_width = request.form.get('patch_width', DEFAULT_PATCH_SIZE[1])
     if file1 and file2 and port:
+        try:
+            patch_size = (int(patch_height), int(patch_width))
+            if patch_size[0] <= 0 or patch_size[1] <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "reason": "invalid patch size"}), 400
+
         file_path1 = os.path.join(app.config['UPLOAD_FOLDER'], file1.filename)
         file_path2 = os.path.join(app.config['UPLOAD_FOLDER'], file2.filename)
         file1.save(file_path1)
         file2.save(file_path2)
 
         stop_flag.clear()
-        threading.Thread(target=send_image, args=(file_path1, file_path2, int(port))).start()
+        threading.Thread(target=send_image, args=(file_path1, file_path2, int(port), patch_size)).start()
         return jsonify({"status": "sending"})
     return jsonify({"status": "error"})
 
