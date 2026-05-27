@@ -6,6 +6,7 @@
     <title>Image Transfer (TX/RX)</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
 <body class="transfer-app">
 <div class="container">
@@ -17,6 +18,22 @@
             <h2>TX (left): multi links + multi images</h2>
 
             <form id="txForm" method="post" enctype="multipart/form-data">
+
+                <div class="row">
+                    <div class="form-group">
+                        <label>Mode:</label>
+                        <div class="mode-selector">
+                            <label class="mode-radio">
+                                <input type="radio" name="mode" value="user" checked onchange="toggleTxMode()">
+                                User Define
+                            </label>
+                            <label class="mode-radio">
+                                <input type="radio" name="mode" value="continual" onchange="toggleTxMode()">
+                                Continual Trans
+                            </label>
+                        </div>
+                    </div>
+                </div>
 
                 <div class="row">
                     <div class="form-group">
@@ -42,20 +59,37 @@
                     </div>
                 </div>
 
-                <div class="form-group">
-                    <label>Images (one per CSI):</label>
-                    <div id="txList"></div>
-                    <div class="hint">
-                        Tip: after you create a link on the canvas, it will appear here as CSI (e.g. 13-14).
+                <!-- User-define mode: file uploads -->
+                <div id="userDefineSection">
+                    <div class="form-group">
+                        <label>Images (one per CSI):</label>
+                        <div id="txList"></div>
+                        <div class="hint">
+                            Tip: after you create a link on the canvas, it will appear here as CSI (e.g. 13-14).
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="tx-neural-label">
+                            <input type="checkbox" name="neural_bypass" value="1">
+                            Bypass GNU Radio — JSCE encode/decode on server (no UDP TX)
+                        </label>
+                        <div class="hint">For debugging: merged latent with the same codec as the featuremap scripts; RX panels update without starting the UDP receiver.</div>
                     </div>
                 </div>
 
-                <div class="form-group">
-                    <label class="tx-neural-label">
-                        <input type="checkbox" name="neural_bypass" value="1">
-                        Bypass GNU Radio — JSCE encode/decode on server (no UDP TX)
-                    </label>
-                    <div class="hint">For debugging: merged latent with the same codec as the featuremap scripts; RX panels update without starting the UDP receiver.</div>
+                <!-- Continual mode: directory source -->
+                <div id="continualSection" style="display:none;">
+                    <div class="form-group">
+                        <label for="image_dir">Image directory path:</label>
+                        <input type="text" id="image_dir" name="image_dir" placeholder="e.g. /path/to/image/dataset" style="width:100%;">
+                        <div class="hint">Random images will be sampled from this directory each round.</div>
+                    </div>
+                    <div class="form-group">
+                        <label for="round_interval">Round interval (seconds):</label>
+                        <input type="number" id="round_interval" name="round_interval" value="3" min="1" max="30" step="1">
+                        <div class="hint">Pause between transmission rounds.</div>
+                    </div>
                 </div>
 
                 <div class="button-group">
@@ -90,6 +124,41 @@
             </div>
 
             <div class="statusline" id="rxStatus"></div>
+
+            <!-- Quantitative Metrics Panel -->
+            <div class="metrics-panel">
+                <h3>Quantitative Metrics</h3>
+                <div class="metrics-charts">
+                    <div class="chart-wrap">
+                        <canvas id="qualityChart"></canvas>
+                    </div>
+                    <div class="chart-wrap">
+                        <canvas id="throughputChart"></canvas>
+                    </div>
+                </div>
+                <div class="metrics-stats">
+                    <div class="ms-item">
+                        <span class="ms-label">Round</span>
+                        <span class="ms-value" id="mRound">—</span>
+                    </div>
+                    <div class="ms-item">
+                        <span class="ms-label">SSIM</span>
+                        <span class="ms-value" id="mSsim">—</span>
+                    </div>
+                    <div class="ms-item">
+                        <span class="ms-label">PSNR</span>
+                        <span class="ms-value" id="mPsnr">—</span>
+                    </div>
+                    <div class="ms-item">
+                        <span class="ms-label">Throughput</span>
+                        <span class="ms-value" id="mThroughput">—</span>
+                    </div>
+                    <div class="ms-item">
+                        <span class="ms-label">Progress</span>
+                        <span class="ms-value" id="mProgress">—</span>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -140,6 +209,21 @@
     socket.on('tx_status', (data) => {
         if (data && data.message) txStatus.textContent = data.message;
     });
+    socket.on('round_update', (data) => {
+        if (!data) return;
+        const r = data.round || '—';
+        document.getElementById('mRound').textContent = '#' + r;
+    });
+
+    function toggleTxMode() {
+        const isContinual = document.querySelector('input[name="mode"]:checked').value === 'continual';
+        document.getElementById('userDefineSection').style.display = isContinual ? 'none' : '';
+        document.getElementById('continualSection').style.display = isContinual ? '' : 'none';
+        // toggle required on file inputs so validation doesn't block continual mode
+        document.querySelectorAll('#txList input[type="file"]').forEach(el => {
+            el.required = !isContinual;
+        });
+    }
 
     function placeholderPixel() {
         return "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
@@ -513,6 +597,131 @@
     renderTxList();
     renderRxGrid();
     resizeCanvas();
+
+    // ----- Quantitative Metrics Charts -----
+    const CSI_COLORS = ['#007aff', '#34c759', '#ff9500', '#ff3b30', '#af52de', '#5ac8fa', '#ff2d55'];
+    const SSIM_DATASET_COLOR = '#007aff';
+    const PSNR_DATASET_COLOR = '#34c759';
+    const THROUGHPUT_COLORS = ['#ff9500', '#ff3b30', '#af52de', '#5ac8fa'];
+
+    const qualityCtx = document.getElementById('qualityChart').getContext('2d');
+    const throughputCtx = document.getElementById('throughputChart').getContext('2d');
+
+    const qualityChart = new Chart(qualityCtx, {
+        type: 'line',
+        data: {
+            datasets: [
+                { label: 'SSIM', data: [], borderColor: SSIM_DATASET_COLOR, backgroundColor: SSIM_DATASET_COLOR + '20', fill: true, tension: 0.3, pointRadius: 0, yAxisID: 'y' },
+                { label: 'PSNR (dB)', data: [], borderColor: PSNR_DATASET_COLOR, backgroundColor: PSNR_DATASET_COLOR + '20', fill: true, tension: 0.3, pointRadius: 0, yAxisID: 'y1' },
+            ]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            interaction: { mode: 'nearest', intersect: false },
+            plugins: { legend: { position: 'top', labels: { boxWidth: 12, padding: 8, font: { size: 10 } } } },
+            scales: {
+                x: { type: 'linear', display: true, title: { display: true, text: 'Time (s)', font: { size: 10 } }, ticks: { font: { size: 9 } } },
+                y: { position: 'left', title: { display: true, text: 'SSIM', font: { size: 10 } }, min: 0, max: 1, ticks: { font: { size: 9 } } },
+                y1: { position: 'right', title: { display: true, text: 'PSNR (dB)', font: { size: 10 } }, grid: { drawOnChartArea: false }, ticks: { font: { size: 9 } } },
+            }
+        }
+    });
+
+    const throughputChart = new Chart(throughputCtx, {
+        type: 'line',
+        data: { datasets: [] },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            interaction: { mode: 'nearest', intersect: false },
+            plugins: { legend: { position: 'top', labels: { boxWidth: 12, padding: 8, font: { size: 10 } } } },
+            scales: {
+                x: { type: 'linear', display: true, title: { display: true, text: 'Time (s)', font: { size: 10 } }, ticks: { font: { size: 9 } } },
+                y: { position: 'left', title: { display: true, text: 'Throughput (B/s)', font: { size: 10 } }, beginAtZero: true, ticks: { font: { size: 9 } } },
+            }
+        }
+    });
+
+    const csiDatasetMap = {};
+
+    function getOrCreateThroughputDataset(csi) {
+        if (csiDatasetMap[csi]) return csiDatasetMap[csi];
+        const idx = Object.keys(csiDatasetMap).length;
+        const color = THROUGHPUT_COLORS[idx % THROUGHPUT_COLORS.length];
+        const ds = {
+            label: csi,
+            data: [],
+            borderColor: color,
+            backgroundColor: color + '20',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 0,
+        };
+        throughputChart.data.datasets.push(ds);
+        throughputChart.update();
+        csiDatasetMap[csi] = ds;
+        return ds;
+    }
+
+    function resetMetricsCharts() {
+        qualityChart.data.datasets[0].data = [];
+        qualityChart.data.datasets[1].data = [];
+        qualityChart.update();
+        throughputChart.data.datasets.splice(0, throughputChart.data.datasets.length);
+        throughputChart.update();
+        for (const key of Object.keys(csiDatasetMap)) delete csiDatasetMap[key];
+        document.getElementById('mRound').textContent = '—';
+        document.getElementById('mSsim').textContent = '—';
+        document.getElementById('mPsnr').textContent = '—';
+        document.getElementById('mThroughput').textContent = '—';
+        document.getElementById('mProgress').textContent = '—';
+    }
+
+    socket.on('metrics_update', (data) => {
+        if (!data) return;
+
+        // Update quality chart (SSIM + PSNR from the emitting CSI)
+        if (data.ssim_history && data.ssim_history.length > 0) {
+            const times = data.time_history || [];
+            qualityChart.data.datasets[0].data = times.map((t, i) => ({ x: t, y: data.ssim_history[i] }));
+            qualityChart.data.datasets[1].data = times.map((t, i) => ({ x: t, y: data.psnr_history[i] }));
+            qualityChart.update('none');
+        }
+
+        // Update throughput chart per CSI
+        const ds = getOrCreateThroughputDataset(data.csi);
+        const t = data.elapsed_seconds || 0;
+        const bps = data.throughput_bps || 0;
+        ds.data.push({ x: t, y: bps });
+        if (ds.data.length > 200) ds.data.shift();
+        throughputChart.update('none');
+
+        // Update stat badges
+        document.getElementById('mSsim').textContent = data.ssim > 0 ? data.ssim.toFixed(4) : '—';
+        document.getElementById('mPsnr').textContent = data.psnr > 0 ? data.psnr.toFixed(2) + ' dB' : '—';
+
+        const bpsVal = data.throughput_bps || 0;
+        if (bpsVal > 1024 * 1024) {
+            document.getElementById('mThroughput').textContent = (bpsVal / 1024 / 1024).toFixed(2) + ' MB/s';
+        } else if (bpsVal > 1024) {
+            document.getElementById('mThroughput').textContent = (bpsVal / 1024).toFixed(1) + ' KB/s';
+        } else {
+            document.getElementById('mThroughput').textContent = bpsVal > 0 ? bpsVal.toFixed(0) + ' B/s' : '—';
+        }
+
+        const pct = data.completion_pct || 0;
+        const exp = data.expected_pieces || 0;
+        if (exp > 0) {
+            document.getElementById('mProgress').textContent = pct.toFixed(1) + '% (' + data.piece_count + '/' + exp + ')';
+        } else if (data.piece_count > 0) {
+            document.getElementById('mProgress').textContent = data.piece_count + ' pieces';
+        }
+    });
+
+    // Override rx_reset to also clear charts
+    const _origRxReset = socket._callbacks && socket._callbacks['rx_reset'];
+    socket.on('rx_reset', () => {
+        resetMetricsCharts();
+    });
 </script>
 </body>
 </html>

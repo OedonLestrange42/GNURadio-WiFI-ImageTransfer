@@ -10,7 +10,7 @@ import socket
 import pickle
 import struct
 import numpy as np
-from image_detach_rebuild import redraw_image, PATCH_PIECE_SIZE as NEURAL_BYPASS_PIECE_SIZE
+from image_detach_rebuild import redraw_image, PIECE_SIZE, PATCH_PIECE_SIZE as NEURAL_BYPASS_PIECE_SIZE
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO
 from PIL import Image
@@ -44,6 +44,11 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode=_ASYNC_MODE)
 stop_thread = False  # receiver stop flag
 # multi-link reconstruction (keyed by CSI like "13-14")
 reconstructed_images: dict[str, np.ndarray] = {}
+
+# --- quantitative metrics ---
+original_images: dict[str, np.ndarray] = {}
+metrics_state: dict[str, dict] = {}
+_metrics_last_emit: dict[str, float] = {}
 
 send_stop_flag = threading.Event()
 
@@ -159,6 +164,131 @@ def _compute_channel_state_for_csi(csi: str):
     }
 
 
+# --- Quantitative metrics helpers --------------------------------------------------
+
+def compute_mse(img1: np.ndarray, img2: np.ndarray) -> float:
+    h, w = min(img1.shape[0], img2.shape[0]), min(img1.shape[1], img2.shape[1])
+    diff = img1[:h, :w].astype(np.float64) - img2[:h, :w].astype(np.float64)
+    return float(np.mean(diff ** 2))
+
+
+def compute_psnr(img1: np.ndarray, img2: np.ndarray) -> float:
+    mse = compute_mse(img1, img2)
+    if mse < 1e-10:
+        return 100.0
+    return float(20.0 * np.log10(255.0 / np.sqrt(mse)))
+
+
+def compute_ssim(img1: np.ndarray, img2: np.ndarray) -> float:
+    h = min(img1.shape[0], img2.shape[0])
+    w = min(img1.shape[1], img2.shape[1])
+    a = img1[:h, :w].astype(np.float64)
+    b = img2[:h, :w].astype(np.float64)
+    C1 = (0.01 * 255.0) ** 2
+    C2 = (0.03 * 255.0) ** 2
+    ssim_c = []
+    for c in range(3):
+        aa, bb = a[:, :, c], b[:, :, c]
+        mu1, mu2 = np.mean(aa), np.mean(bb)
+        s1, s2 = np.var(aa), np.var(bb)
+        s12 = np.mean((aa - mu1) * (bb - mu2))
+        num = (2.0 * mu1 * mu2 + C1) * (2.0 * s12 + C2)
+        den = (mu1 ** 2 + mu2 ** 2 + C1) * (s1 + s2 + C2)
+        ssim_c.append(num / den)
+    return float(np.mean(ssim_c))
+
+
+def init_metrics(csi: str, expected_pieces: int = 0):
+    metrics_state.setdefault(csi, {
+        "piece_count": 0,
+        "total_bytes": 0,
+        "dropped_count": 0,
+        "start_time": time.time(),
+        "last_ssim": 0.0,
+        "last_psnr": 0.0,
+        "ssim_history": [],
+        "psnr_history": [],
+        "throughput_history": [],
+        "time_history": [],
+        "expected_pieces": expected_pieces,
+        "_last_piece_time": 0.0,
+    })
+
+
+def _update_piece_metrics(csi: str, piece_bytes: int = 0, dropped: bool = False):
+    st = metrics_state.get(csi)
+    if st is None:
+        init_metrics(csi)
+        st = metrics_state[csi]
+    st["piece_count"] += 1
+    if not dropped:
+        st["total_bytes"] += piece_bytes
+    else:
+        st["dropped_count"] += 1
+    st["_last_piece_time"] = time.time()
+
+
+def _update_quality_metrics(csi: str, reconstructed: np.ndarray, original: np.ndarray):
+    st = metrics_state.get(csi)
+    if st is None:
+        return
+    ssim = compute_ssim(reconstructed, original)
+    psnr = compute_psnr(reconstructed, original)
+    st["last_ssim"] = ssim
+    st["last_psnr"] = psnr
+    elapsed = time.time() - st["start_time"]
+    st["ssim_history"].append(ssim)
+    st["psnr_history"].append(psnr)
+    st["time_history"].append(elapsed)
+
+
+def _compute_throughput(csi: str) -> float:
+    st = metrics_state.get(csi)
+    if st is None or st["piece_count"] < 2:
+        return 0.0
+    elapsed = time.time() - st["start_time"]
+    return st["total_bytes"] / elapsed if elapsed > 0 else 0.0
+
+
+def _emit_metrics(csi: str):
+    st = metrics_state.get(csi)
+    if st is None:
+        return
+    now = time.time()
+    # throttle to ~every 400 ms
+    last = _metrics_last_emit.get(csi, 0.0)
+    if now - last < 0.4 and st["piece_count"] % 5 != 0:
+        return
+    _metrics_last_emit[csi] = now
+    elapsed = now - st["start_time"]
+    throughput = _compute_throughput(csi)
+    completion = 0.0
+    if st["expected_pieces"] > 0:
+        completion = min(100.0, 100.0 * st["piece_count"] / st["expected_pieces"])
+    data = {
+        "csi": csi,
+        "piece_count": st["piece_count"],
+        "dropped_count": st["dropped_count"],
+        "elapsed_seconds": round(elapsed, 1),
+        "throughput_bps": round(throughput, 1),
+        "ssim": round(st["last_ssim"], 4),
+        "psnr": round(st["last_psnr"], 2),
+        "completion_pct": round(completion, 1),
+        "expected_pieces": st["expected_pieces"],
+        "time_history": st["time_history"][-100:],
+        "ssim_history": [round(v, 4) for v in st["ssim_history"][-100:]],
+        "psnr_history": [round(v, 2) for v in st["psnr_history"][-100:]],
+    }
+    socketio.emit("metrics_update", data)
+
+
+def _estimate_piece_bytes(csi: str, piece) -> int:
+    """Estimate wire bytes for a piece (payload, not UDP header)."""
+    return int(piece[1].nbytes) if hasattr(piece[1], "nbytes") else int(np.prod(piece[1].shape))
+
+
+# -----------------------------------------------------------------------------------
+
 def _apply_channel_effect(piece, csi: str):
     """
     Apply a lightweight, visually-obvious "channel" effect to a piece:
@@ -216,6 +346,20 @@ def receive_pieces():
                     print(f"Received piece csi={csi} at position ({yy}, {xx}, {cc})")
                     reconstructed_images[csi] = redraw_image(piece, reconstructed_images[csi])
                     img = Image.fromarray(reconstructed_images[csi].astype("uint8"), "RGB")
+
+                    # --- metrics ---
+                    if csi not in metrics_state:
+                        uph, upw = PIECE_SIZE
+                        exp = (IMAGE_SIZE[0] // uph) * (IMAGE_SIZE[1] // upw) * 3
+                        init_metrics(csi, expected_pieces=exp)
+                    _update_piece_metrics(csi, _estimate_piece_bytes(csi, piece))
+                    # periodically compute quality during UDP rebuild
+                    st = metrics_state[csi]
+                    if st["piece_count"] % 30 == 0:
+                        orig = original_images.get(csi)
+                        if orig is not None:
+                            _update_quality_metrics(csi, reconstructed_images[csi], orig)
+                    _emit_metrics(csi)
                 elif kind == "jpeg":
                     img = obj
                     csi = "jpeg"
@@ -286,6 +430,8 @@ def _reset_rx_for_csis(csis: list[str]):
     global reconstructed_images
     for c in csis:
         reconstructed_images.pop(c, None)
+        metrics_state.pop(c, None)
+        _metrics_last_emit.pop(c, None)
     socketio.emit("rx_reset", {"csis": csis})
 
 
@@ -324,17 +470,29 @@ def _stream_neural_decoded_pieces(
     if buf is None:
         buf = np.zeros(IMAGE_SIZE, dtype=np.uint8)
         reconstructed_images[csi] = buf
-    for piece in pieces:
+    total = len(pieces)
+    for idx, piece in enumerate(pieces):
         if send_stop_flag.is_set():
             return
         if csi not in channel_states:
             _compute_channel_state_for_csi(csi)
         piece2 = _apply_channel_effect(piece, csi)
         if piece2 is None:
+            _update_piece_metrics(csi, dropped=True)
+            _emit_metrics(csi)
             continue
+        _update_piece_metrics(csi, _estimate_piece_bytes(csi, piece2))
         redraw_image(piece2, buf)
+
+        # periodically compute quality metrics so the chart shows a curve
+        if idx % 5 == 0 or idx == total - 1:
+            orig = original_images.get(csi)
+            if orig is not None:
+                _update_quality_metrics(csi, buf, orig)
+
         delay = max(RX_PIECE_EMIT_DELAY_S, piece_delay_s)
         _emit_jpeg_piece_update(csi, buf, True, delay, sleep_fn)
+        _emit_metrics(csi)
 
 
 def _neural_bypass_worker(saved: list[tuple[str, str]], piece_delay_s: float):
@@ -370,6 +528,16 @@ def _neural_bypass_worker(saved: list[tuple[str, str]], piece_delay_s: float):
                 pil_out = pil_out.resize((IMAGE_SIZE[1], IMAGE_SIZE[0]), Image.Resampling.LANCZOS)
                 per_csi[sc] = np.array(pil_out.convert("RGB"), dtype=np.uint8)
 
+                # --- metrics: init + quality ---
+                ph, pw = NEURAL_BYPASS_PIECE_SIZE
+                exp = (IMAGE_SIZE[0] // ph) * (IMAGE_SIZE[1] // pw)
+                if sc not in metrics_state:
+                    init_metrics(sc, expected_pieces=exp)
+                orig = original_images.get(sc)
+                if orig is not None:
+                    _update_quality_metrics(sc, per_csi[sc], orig)
+                _emit_metrics(sc)
+
             if len(per_csi) == 1:
                 (sc, arr) = next(iter(per_csi.items()))
                 _stream_neural_decoded_pieces(sc, arr, piece_delay_s, _async_sleep)
@@ -392,6 +560,134 @@ def _neural_bypass_worker(saved: list[tuple[str, str]], piece_delay_s: float):
         )
     except Exception as e:
         socketio.emit("tx_status", {"message": f"Neural bypass failed: {e}"})
+
+
+def _continual_transmit_worker(
+    image_dir: str, csis: list[str], piece_delay_s: float, round_interval_s: float = 3.0
+):
+    """
+    Continual transmission mode:
+    - Each round, sample len(csis) random images from *image_dir*.
+    - Encode / decode through JSCE and stream patches to the UI.
+    - Per-round originals are set so SSIM/PSNR track fresh images each round.
+    """
+    from image_detach_rebuild import detach_image_patches
+
+    def _sleep(d: float):
+        try:
+            socketio.sleep(d)
+        except Exception:
+            time.sleep(d)
+
+    try:
+        codec = _get_jsce_codec()
+        round_num = 0
+        while not send_stop_flag.is_set():
+            round_num += 1
+
+            # list valid images
+            valid_exts = (".png", ".jpg", ".jpeg", ".bmp", ".tiff")
+            try:
+                all_files = sorted(
+                    f for f in os.listdir(image_dir)
+                    if f.lower().endswith(valid_exts)
+                )
+            except FileNotFoundError:
+                socketio.emit("tx_status", {"message": f"Directory not found: {image_dir}"})
+                _sleep(round_interval_s)
+                continue
+
+            n_links = len(csis)
+            if len(all_files) < n_links:
+                socketio.emit(
+                    "tx_status",
+                    {"message": f"Round {round_num}: need {n_links} images, found {len(all_files)}. Retrying..."},
+                )
+                _sleep(round_interval_s)
+                continue
+
+            # sample random images for this round
+            selected = random.sample(all_files, n_links)
+            basenames = [os.path.splitext(f)[0] for f in selected]
+
+            # load originals + build codec input
+            image_dict: dict[str, Image.Image] = {}
+            round_originals: dict[str, np.ndarray] = {}
+            for i, csi in enumerate(csis):
+                sc = str(csi)
+                path = os.path.join(image_dir, selected[i])
+                pil = Image.open(path).convert("RGB")
+                image_dict[sc] = pil
+                round_originals[sc] = np.array(
+                    pil.resize((IMAGE_SIZE[1], IMAGE_SIZE[0])), dtype=np.uint8
+                )
+
+            # swap originals for quality comparison
+            original_images.clear()
+            original_images.update(round_originals)
+
+            # reset receiver buffers and metrics
+            for csi in csis:
+                reconstructed_images.pop(csi, None)
+                metrics_state.pop(csi, None)
+                _metrics_last_emit.pop(csi, None)
+
+            socketio.emit("rx_reset", {"csis": list(csis)})
+            socketio.emit("round_update", {"round": round_num, "files": basenames, "csis": list(csis)})
+            socketio.emit(
+                "tx_status",
+                {"message": f"Round {round_num}/∞: {', '.join(basenames)}"},
+            )
+
+            # encode merged latent
+            latent = codec.img2msg(image_dict)
+
+            # decode per CSI
+            per_csi: dict[str, np.ndarray] = {}
+            for csi in csis:
+                sc = str(csi)
+                pil_out = codec.msg2img(latent, sc)
+                pil_out = pil_out.resize(
+                    (IMAGE_SIZE[1], IMAGE_SIZE[0]), Image.Resampling.LANCZOS
+                )
+                per_csi[sc] = np.array(pil_out.convert("RGB"), dtype=np.uint8)
+
+            # stream patches (parallel for multiple links)
+            if n_links == 1:
+                sc = csis[0]
+                ph, pw = NEURAL_BYPASS_PIECE_SIZE
+                init_metrics(sc, expected_pieces=(IMAGE_SIZE[0] // ph) * (IMAGE_SIZE[1] // pw))
+                _stream_neural_decoded_pieces(sc, per_csi[sc], piece_delay_s, _sleep)
+            else:
+                threads = []
+                for sc in csis:
+                    ph, pw = NEURAL_BYPASS_PIECE_SIZE
+                    init_metrics(sc, expected_pieces=(IMAGE_SIZE[0] // ph) * (IMAGE_SIZE[1] // pw))
+                    t = threading.Thread(
+                        target=_stream_neural_decoded_pieces,
+                        args=(sc, per_csi[sc], piece_delay_s, time.sleep),
+                        daemon=True,
+                    )
+                    threads.append(t)
+                    t.start()
+                for t in threads:
+                    t.join()
+
+            socketio.emit(
+                "tx_status",
+                {"message": f"Round {round_num} done — {round_interval_s:.0f}s pause..."},
+            )
+            # pause between rounds
+            steps = int(round_interval_s / 0.1)
+            for _ in range(steps):
+                if send_stop_flag.is_set():
+                    return
+                _sleep(0.1)
+
+    except Exception as e:
+        socketio.emit("tx_status", {"message": f"Continual tx failed: {e}"})
+        import traceback
+        traceback.print_exc()
 
 
 def _send_image_worker(image_path: str, port: int, csi: str, piece_delay_s: float):
@@ -434,6 +730,58 @@ def handle_send_image():
     if not os.path.exists(UPLOAD_FOLDER):
         os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+    mode = (request.form.get("mode") or "user").strip()
+
+    # --- Continual transmission mode ---
+    if mode == "continual":
+        image_dir = (request.form.get("image_dir") or "").strip()
+        if not image_dir or not os.path.isdir(image_dir):
+            return jsonify({"status": "error", "reason": f"Invalid image directory: {image_dir}"}), 400
+
+        try:
+            round_interval_s = float(request.form.get("round_interval") or 3)
+        except ValueError:
+            round_interval_s = 3.0
+        round_interval_s = max(1.0, min(30.0, round_interval_s))
+
+        try:
+            packet_loss_pct = float(request.form.get("packet_loss_pct") or 0)
+        except ValueError:
+            packet_loss_pct = 0.0
+        extra_loss = packet_loss_pct / 100.0
+
+        try:
+            piece_delay_ms = float(request.form.get("piece_delay_ms") or 25)
+        except ValueError:
+            piece_delay_ms = 25.0
+        piece_delay_s = max(5.0, min(200.0, piece_delay_ms)) / 1000.0
+
+        csis = list(selected_csis) if selected_csis else ["3-4"]
+        for csi in csis:
+            channel_states.setdefault(csi, {})["drop_prob_extra"] = extra_loss
+            _compute_channel_state_for_csi(csi)
+
+        _reset_rx_for_csis(csis)
+        socketio.emit(
+            "canvas_state",
+            {"nodes": nodes_state, "selected_csis": csis, "channel_states": channel_states},
+        )
+        send_stop_flag.clear()
+        socketio.start_background_task(
+            _continual_transmit_worker, image_dir, csis, piece_delay_s, round_interval_s
+        )
+        socketio.emit(
+            "tx_status",
+            {
+                "message": (
+                    f"Continual TX from {image_dir} ({len(csis)} link(s), "
+                    f"~{round_interval_s:.0f}s interval). Stop to end."
+                )
+            },
+        )
+        return jsonify({"status": "sending", "links": len(csis), "mode": "continual"})
+
+    # --- User-defined mode (original) ---
     neural_bypass = (request.form.get("neural_bypass") or "").strip() in ("1", "on", "true", "yes")
     port = request.form.get("port")
     if not neural_bypass:
@@ -491,6 +839,12 @@ def handle_send_image():
         f.save(file_path)
         channel_states.setdefault(csi, {})["drop_prob_extra"] = extra_loss
         _compute_channel_state_for_csi(csi)
+        # save original for SSIM / PSNR comparison
+        try:
+            orig = np.array(Image.open(file_path).convert("RGB").resize((IMAGE_SIZE[1], IMAGE_SIZE[0])), dtype=np.uint8)
+            original_images[str(csi)] = orig
+        except Exception:
+            original_images.pop(str(csi), None)
         saved.append((file_path, csi))
 
     started = len(saved)

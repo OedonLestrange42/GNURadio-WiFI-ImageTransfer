@@ -256,6 +256,9 @@ body.transfer-app {
     .transfer-app #rxGrid {
         grid-template-columns: 1fr;
     }
+    .transfer-app .chart-wrap {
+        height: 160px;
+    }
     .transfer-app .tx-link-row {
         grid-template-columns: 1fr 76px;
         grid-template-areas:
@@ -400,4 +403,115 @@ input[type="number"]:focus {
     height: auto;
     border: 1px solid #ddd;
     padding: 5px;
+}
+
+/* --- Quantitative Metrics Panel --- */
+.transfer-app .metrics-panel {
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid #d1d1d6;
+}
+
+.transfer-app .metrics-panel h3 {
+    margin: 0 0 10px 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: #1c1c1e;
+}
+
+.transfer-app .metrics-charts {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+}
+
+.transfer-app .chart-wrap {
+    width: 100%;
+    min-width: 0;
+    height: 180px;
+    background: #fff;
+    border: 1px solid #e5e5ea;
+    border-radius: 10px;
+    padding: 6px;
+}
+
+.transfer-app .metrics-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.transfer-app .ms-item {
+    flex: 1 1 0;
+    min-width: 0;
+    background: #f5f5f7;
+    border-radius: 8px;
+    padding: 8px 4px;
+    text-align: center;
+    border: 1px solid #e5e5ea;
+}
+
+.transfer-app .ms-label {
+    display: block;
+    font-size: 10px;
+    font-weight: 500;
+    color: #8e8e93;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    margin-bottom: 2px;
+}
+
+.transfer-app .ms-value {
+    display: block;
+    font-size: 14px;
+    font-weight: 650;
+    color: #1c1c1e;
+    font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 960px) {
+    .transfer-app .chart-wrap {
+        height: 160px;
+    }
+}
+
+/* --- Mode selector --- */
+.transfer-app .mode-selector {
+    display: flex;
+    gap: 12px;
+    padding: 4px 0;
+}
+
+.transfer-app .mode-radio {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 14px;
+    font-weight: 500;
+    color: #3a3a3c;
+    cursor: pointer;
+}
+
+.transfer-app .mode-radio input[type="radio"] {
+    width: auto;
+    margin: 0;
+    cursor: pointer;
+}
+
+.transfer-app .tx-neural-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    color: #3a3a3c;
+    cursor: pointer;
+}
+
+.transfer-app .tx-neural-label input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+    cursor: pointer;
 }
