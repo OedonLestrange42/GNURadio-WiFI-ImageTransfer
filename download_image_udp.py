@@ -25,6 +25,7 @@ from typing import Optional
 # Configuration
 HOST = 'localhost'
 PORT = 10010
+GNURADIO_PDU_PORT = 50010  # GNU Radio IRS_tranceiver network_socket_pdu input
 IMAGE_SIZE = (300, 300, 3)
 UPLOAD_FOLDER = 'uploads'
 # JSCE (same defaults as upload_featuremap_udp.py / download_featuremap_udp.py)
@@ -404,6 +405,7 @@ def index():
     return render_template(
         "transfer.html",
         default_port=PORT,
+        gnuradio_port=GNURADIO_PDU_PORT,
         host=HOST,
         nodes=nodes_state,
         selected_csis=selected_csis,
@@ -825,6 +827,162 @@ def _continual_transmit_worker(
         traceback.print_exc()
 
 
+def _continual_gnuradio_worker(
+    image_dir: str, csis: list[str], piece_delay_s: float, round_interval_s: float = 3.0,
+    hf_dataset_name: str = "", gr_port: int = GNURADIO_PDU_PORT,
+    piece_size=(50, 50),
+):
+    """
+    Continual transmission mode via GNU Radio:
+    - Each round, sample images from *image_dir* (or *hf_dataset_name*).
+    - Detach each image into pieces and send via UDP to GNU Radio PDU port.
+    - Pieces are tagged with CSI so the receiver (port 10010) can route them.
+    - Toy channel model (drop + noise) applied server-side.
+    """
+    from image_detach_rebuild import detach_image_patches
+
+    def _sleep(d: float):
+        try:
+            socketio.sleep(d)
+        except Exception:
+            time.sleep(d)
+
+    # --- HF dataset init (once) ---
+    hf_dataset = None
+    hf_dataset_size = 0
+    if hf_dataset_name:
+        try:
+            from datasets import load_dataset
+            hf_dataset = load_dataset(
+                hf_dataset_name,
+                cache_dir=HF_DATASET_CACHE_DIR,
+                split="train",
+            )
+            hf_dataset_size = len(hf_dataset)
+            socketio.emit(
+                "tx_status",
+                {"message": f"Loaded HF dataset '{hf_dataset_name}' ({hf_dataset_size} samples)."},
+            )
+        except Exception as e:
+            socketio.emit("tx_status", {"message": f"HF dataset load failed: {e}"})
+            return
+
+    try:
+        round_num = 0
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            while not send_stop_flag.is_set():
+                round_num += 1
+
+                # --- get source images ---
+                if hf_dataset is not None:
+                    n_links = len(csis)
+                    if hf_dataset_size < n_links:
+                        socketio.emit(
+                            "tx_status",
+                            {"message": f"HF dataset has {hf_dataset_size} samples, need {n_links}."},
+                        )
+                        _sleep(round_interval_s)
+                        continue
+                    indices = random.sample(range(hf_dataset_size), n_links)
+                    hf_rows = [hf_dataset[i] for i in indices]
+                    image_key = "image" if "image" in hf_rows[0] else (next(k for k in ("img", "png") if k in hf_rows[0]))
+                    basenames = [f"hf_{i}" for i in indices]
+                    pil_images = []
+                    for row in hf_rows:
+                        img = row[image_key]
+                        if not isinstance(img, Image.Image):
+                            img = Image.open(img).convert("RGB")
+                        pil_images.append(img.convert("RGB"))
+                else:
+                    valid_exts = (".png", ".jpg", ".jpeg", ".bmp", ".tiff")
+                    try:
+                        all_files = sorted(
+                            f for f in os.listdir(image_dir)
+                            if f.lower().endswith(valid_exts)
+                        )
+                    except FileNotFoundError:
+                        socketio.emit("tx_status", {"message": f"Directory not found: {image_dir}"})
+                        _sleep(round_interval_s)
+                        continue
+
+                    n_links = len(csis)
+                    if len(all_files) < n_links:
+                        socketio.emit(
+                            "tx_status",
+                            {"message": f"Round {round_num}: need {n_links} images, found {len(all_files)}. Retrying..."},
+                        )
+                        _sleep(round_interval_s)
+                        continue
+
+                    selected = random.sample(all_files, n_links)
+                    basenames = [os.path.splitext(f)[0] for f in selected]
+                    pil_images = []
+                    for f in selected:
+                        pil_images.append(Image.open(os.path.join(image_dir, f)).convert("RGB"))
+
+                # --- load originals ---
+                round_originals = {}
+                for i, csi in enumerate(csis):
+                    sc = str(csi)
+                    round_originals[sc] = np.array(
+                        pil_images[i].resize((IMAGE_SIZE[1], IMAGE_SIZE[0])), dtype=np.uint8
+                    )
+                original_images.clear()
+                original_images.update(round_originals)
+
+                socketio.emit("round_update", {"round": round_num, "files": basenames, "csis": list(csis)})
+                socketio.emit(
+                    "tx_status",
+                    {"message": f"Round {round_num}/inf via GNU Radio: {', '.join(basenames)} (port {gr_port})"},
+                )
+
+                # --- detach each image and send pieces via UDP ---
+                for i, csi in enumerate(csis):
+                    sc = str(csi)
+                    img_arr = np.array(pil_images[i].resize((IMAGE_SIZE[1], IMAGE_SIZE[0])), dtype=np.uint8)
+                    pieces = detach_image_patches(img_arr, piece_size=piece_size)
+
+                    if sc not in metrics_state:
+                        ph, pw = piece_size
+                        exp = (IMAGE_SIZE[0] // ph) * (IMAGE_SIZE[1] // pw) * 3
+                        init_metrics(sc, expected_pieces=exp)
+
+                    for piece in pieces:
+                        if send_stop_flag.is_set():
+                            break
+                        if sc not in channel_states:
+                            _compute_channel_state_for_csi(sc)
+                        piece2 = _apply_channel_effect(piece, sc)
+                        if piece2 is None:
+                            _update_piece_metrics(sc, dropped=True)
+                            _emit_metrics(sc)
+                            continue
+
+                        payload = pickle.dumps({"csi": sc, "piece": piece2}, protocol=pickle.HIGHEST_PROTOCOL)
+                        message_size = struct.pack("=L", len(payload))
+                        s.sendto(message_size + payload, (HOST, int(gr_port)))
+                        _update_piece_metrics(sc, _estimate_piece_bytes(sc, piece2))
+                        _emit_metrics(sc)
+                        time.sleep(piece_delay_s)
+
+                socketio.emit(
+                    "tx_status",
+                    {"message": f"Round {round_num} done - {round_interval_s:.0f}s pause..."},
+                )
+
+                steps = int(round_interval_s / 0.1)
+                for _ in range(steps):
+                    if send_stop_flag.is_set():
+                        return
+                    _sleep(0.1)
+
+    except Exception as e:
+        socketio.emit("tx_status", {"message": f"Continual GNU Radio tx failed: {e}"})
+        import traceback
+        traceback.print_exc()
+
+
+
 def _send_image_worker(image_path: str, port: int, csi: str, piece_delay_s: float):
     """
     Send detached image pieces via UDP.
@@ -873,6 +1031,7 @@ def handle_send_image():
         hf_dataset_name = (request.form.get("hf_dataset_name") or "").strip()
         use_hf = (request.form.get("use_hf_dataset") or "").strip() in ("1", "on", "true", "yes")
         time_delay_mode = (request.form.get("time_delay_switch") or "").strip() in ("1", "on", "true", "yes")
+        neural_bypass = (request.form.get("neural_bypass") or "").strip() in ("1", "on", "true", "yes")
 
         if use_hf and hf_dataset_name:
             # HF dataset mode: image_dir is optional
@@ -917,39 +1076,54 @@ def handle_send_image():
             {"nodes": nodes_state, "selected_csis": csis, "channel_states": channel_states},
         )
         send_stop_flag.clear()
-        socketio.start_background_task(
-            _continual_transmit_worker, image_dir, csis, piece_delay_s, round_interval_s,
-            hf_dataset_name if use_hf else "", time_delay_mode,
-            piece_size=(bypass_piece_size, bypass_piece_size),
-        )
-        links_info = f"HF dataset '{hf_dataset_name}'" if use_hf else f"dir '{image_dir}'"
-        mode_info = " (time delay viz)" if time_delay_mode else ""
-        socketio.emit(
-            "tx_status",
-            {
-                "message": (
-                    f"Continual TX from {links_info} ({len(csis)} link(s), "
-                    f"~{round_interval_s:.0f}s interval{mode_info}). Stop to end."
-                )
-            },
-        )
+        if neural_bypass:
+            socketio.start_background_task(
+                _continual_transmit_worker, image_dir, csis, piece_delay_s, round_interval_s,
+                hf_dataset_name if use_hf else "", time_delay_mode,
+                piece_size=(bypass_piece_size, bypass_piece_size),
+            )
+            links_info = f"HF dataset '{hf_dataset_name}'" if use_hf else f"dir '{image_dir}'"
+            mode_info = " (time delay viz)" if time_delay_mode else ""
+            socketio.emit(
+                "tx_status",
+                {
+                    "message": (
+                        f"Continual TX (neural bypass) from {links_info} ({len(csis)} link(s), "
+                        f"~{round_interval_s:.0f}s interval{mode_info}). Stop to end."
+                    )
+                },
+            )
+        else:
+            socketio.start_background_task(
+                _continual_gnuradio_worker, image_dir, csis, piece_delay_s, round_interval_s,
+                hf_dataset_name if use_hf else "", gr_port,
+                piece_size=(bypass_piece_size, bypass_piece_size),
+            )
+            links_info = f"HF dataset '{hf_dataset_name}'" if use_hf else f"dir '{image_dir}'"
+            socketio.emit(
+                "tx_status",
+                {
+                    "message": (
+                        f"Continual TX via GNU Radio (port {gr_port}) from {links_info} "
+                        f"({len(csis)} link(s), ~{round_interval_s:.0f}s interval). Stop to end."
+                    )
+                },
+            )
         return jsonify({"status": "sending", "links": len(csis), "mode": "continual"})
 
     # --- User-defined mode (original) ---
     neural_bypass = (request.form.get("neural_bypass") or "").strip() in ("1", "on", "true", "yes")
-    port = request.form.get("port")
     if not neural_bypass:
-        if not port:
-            return jsonify({"status": "error", "reason": "missing port"}), 400
         try:
-            port_i = int(port)
+            gr_port = int(request.form.get("gnuradio_port") or GNURADIO_PDU_PORT)
         except ValueError:
-            return jsonify({"status": "error", "reason": "invalid port"}), 400
-    else:
-        try:
-            port_i = int(port) if port else PORT
-        except ValueError:
-            port_i = PORT
+            gr_port = GNURADIO_PDU_PORT
+        legacy_port = request.form.get("port")
+        if legacy_port:
+            try:
+                gr_port = int(legacy_port)
+            except ValueError:
+                pass
 
     try:
         packet_loss_pct = float(request.form.get("packet_loss_pct") or 0)
@@ -1039,7 +1213,7 @@ def handle_send_image():
     for file_path, csi in saved:
         threading.Thread(
             target=_send_image_worker,
-            args=(file_path, port_i, csi, piece_delay_s),
+            args=(file_path, gr_port, csi, piece_delay_s),
             daemon=True,
         ).start()
 
@@ -1047,7 +1221,7 @@ def handle_send_image():
         "tx_status",
         {
             "message": (
-                f"UDP TX: {started} link(s) → {HOST}:{port_i} "
+                f"UDP TX: {started} link(s) → {HOST}:{gr_port} "
                 f"(piece gap {piece_delay_ms:.0f} ms, extra loss {packet_loss_pct:.0f}%)"
             )
         },

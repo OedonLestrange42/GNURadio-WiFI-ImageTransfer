@@ -38,10 +38,19 @@
                     </div>
 
                     <div class="row">
-                        <div class="form-group">
-                            <label for="port">UDP port:</label>
-                            <input type="number" id="port" name="port" value="{{ default_port }}">
+                        <div class="form-group" id="portGroup">
+                            <label for="port">UDP target port (GNU Radio):</label>
+                            <input type="number" id="port" name="port" value="{{ gnuradio_port }}">
+                            <div class="hint">GNU Radio IRS_tranceiver socket_pdu port — only used when Bypass is OFF.</div>
                         </div>
+                        <div class="form-group" id="rxPortGroup">
+                            <label>RX listen port:</label>
+                            <input type="number" value="{{ default_port }}" disabled>
+                            <div class="hint">Web app listens on port {{ default_port }} for decoded images from GNU Radio.</div>
+                        </div>
+                    </div>
+
+                    <div class="row">
                         <div class="form-group">
                             <label>Selected CSI list:</label>
                             <input type="text" id="csiText" value="{{ selected_csis | join(', ') }}" disabled>
@@ -83,7 +92,7 @@
 
                         <div class="form-group">
                             <label class="tx-neural-label">
-                                <input type="checkbox" name="neural_bypass" value="1">
+                                <input type="checkbox" name="neural_bypass" value="1" checked onchange="toggleGnuradioPort()">
                                 Bypass GNU Radio — JSCE encode/decode on server (no UDP TX)
                             </label>
                             <div class="hint">For debugging: merged latent with the same codec as the featuremap
@@ -115,7 +124,16 @@
                                 step="1">
                             <div class="hint">Pause between transmission rounds.</div>
                         </div>
-                        <div class="form-group"
+                        <div class="form-group">
+                            <label class="tx-neural-label">
+                                <input type="checkbox" name="neural_bypass" value="1" checked
+                                    onchange="toggleGnuradioPort()">
+                                Bypass GNU Radio — JSCE encode/decode on server (no UDP TX)
+                            </label>
+                            <div class="hint">When unchecked, images are sent through GNU Radio's WiFi PHY pipeline
+                                (UDP → GNU Radio port → decoded back on port {{ default_port }}).</div>
+                        </div>
+                        <div class="form-group" id="continualTimeDelayGroup"
                             style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #e5e5ea;">
                             <label class="tx-neural-label">
                                 <input type="checkbox" name="time_delay_switch" value="1">
@@ -264,6 +282,27 @@
             document.querySelectorAll('#txList input[type="file"]').forEach(el => {
                 el.required = !isContinual;
             });
+            toggleGnuradioPort();
+        }
+
+        function toggleGnuradioPort() {
+            // Check bypass state: in User Define mode, use the userDefineSection checkbox;
+            // in Continual mode, use the continualSection checkbox.
+            const isContinual = document.querySelector('input[name="mode"]:checked').value === 'continual';
+            const userDefineBypass = document.querySelector('#userDefineSection input[name="neural_bypass"]');
+            const continualBypass = document.querySelector('#continualSection input[name="neural_bypass"]');
+            const bypassChecked = isContinual
+                ? (continualBypass && continualBypass.checked)
+                : (userDefineBypass && userDefineBypass.checked);
+
+            document.getElementById('portGroup').style.display = bypassChecked ? 'none' : '';
+            document.getElementById('rxPortGroup').style.display = bypassChecked ? 'none' : '';
+
+            // In continual mode, show/hide time delay group (only relevant for neural bypass)
+            if (isContinual) {
+                const tdGroup = document.getElementById('continualTimeDelayGroup');
+                if (tdGroup) tdGroup.style.display = bypassChecked ? '' : 'none';
+            }
         }
 
         function toggleHfDataset() {
