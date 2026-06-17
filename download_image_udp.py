@@ -20,6 +20,7 @@ import os
 import threading
 import time
 import random
+from typing import Optional
 
 # Configuration
 HOST = 'localhost'
@@ -37,6 +38,14 @@ CODEC_IMG_SIZE = (240, 240)
 CODEC_COMPRESSED_CH = 128
 _jsce_codec = None
 _jsce_lock = threading.Lock()
+
+# HuggingFace dataset cache directory (within project dir)
+HF_DATASET_CACHE_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "hf_cache",
+)
+# Time delay history for computation-time visualization
+time_delay_data: dict[str, list[dict]] = {}
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
@@ -456,16 +465,21 @@ def _emit_jpeg_piece_update(
 
 
 def _stream_neural_decoded_pieces(
-    csi: str, decoded_rgb: np.ndarray, piece_delay_s: float, sleep_fn
+    csi: str, decoded_rgb: np.ndarray, piece_delay_s: float, sleep_fn,
+    piece_size: Optional[tuple[int, int]] = None,
 ):
     """
     Shuffled piece-by-piece reveal of one decoded view (mirrors UDP detach/rebuild + channel toy model).
     Runs in a thread when multiple links are active.
+    piece_size — (h, w) for each patch; defaults to NEURAL_BYPASS_PIECE_SIZE.
     """
     from image_detach_rebuild import detach_image_patches
 
+    if piece_size is None:
+        piece_size = NEURAL_BYPASS_PIECE_SIZE
+
     csi = str(csi)
-    pieces = detach_image_patches(decoded_rgb, piece_size=NEURAL_BYPASS_PIECE_SIZE)
+    pieces = detach_image_patches(decoded_rgb, piece_size=piece_size)
     buf = reconstructed_images.get(csi)
     if buf is None:
         buf = np.zeros(IMAGE_SIZE, dtype=np.uint8)
@@ -479,6 +493,13 @@ def _stream_neural_decoded_pieces(
         piece2 = _apply_channel_effect(piece, csi)
         if piece2 is None:
             _update_piece_metrics(csi, dropped=True)
+            # fill dropped region with zeros and emit so the frontend
+            # still updates and the user can see which patches were lost
+            (yy, xx, cc), dropped_piece = piece
+            dh, dw = dropped_piece.shape[:2]
+            buf[yy:yy + dh, xx:xx + dw, :] = 0
+            delay = max(RX_PIECE_EMIT_DELAY_S, piece_delay_s)
+            _emit_jpeg_piece_update(csi, buf, True, delay, sleep_fn)
             _emit_metrics(csi)
             continue
         _update_piece_metrics(csi, _estimate_piece_bytes(csi, piece2))
@@ -494,12 +515,42 @@ def _stream_neural_decoded_pieces(
         _emit_jpeg_piece_update(csi, buf, True, delay, sleep_fn)
         _emit_metrics(csi)
 
+    # force final metrics emit (bypass throttle) so the client sees 100%
+    st = metrics_state.get(csi)
+    if st is not None:
+        elapsed = time.time() - st["start_time"]
+        throughput = _compute_throughput(csi)
+        completion = 100.0 if st["expected_pieces"] > 0 else 0.0
+        data = {
+            "csi": csi,
+            "piece_count": st["piece_count"],
+            "dropped_count": st["dropped_count"],
+            "elapsed_seconds": round(elapsed, 1),
+            "throughput_bps": round(throughput, 1),
+            "ssim": round(st["last_ssim"], 4),
+            "psnr": round(st["last_psnr"], 2),
+            "completion_pct": completion,
+            "expected_pieces": st["expected_pieces"],
+            "time_history": st["time_history"][-100:],
+            "ssim_history": [round(v, 4) for v in st["ssim_history"][-100:]],
+            "psnr_history": [round(v, 2) for v in st["psnr_history"][-100:]],
+        }
+        socketio.emit("metrics_update", data)
+        _metrics_last_emit[csi] = time.time()
 
-def _neural_bypass_worker(saved: list[tuple[str, str]], piece_delay_s: float):
+
+def _neural_bypass_worker(
+    saved: list[tuple[str, str]], piece_delay_s: float,
+    piece_size: Optional[tuple[int, int]] = None,
+):
     """
     JSCE encode/decode without UDP: re-reads images each round (like a looping TX), merges latent,
     decodes per CSI, then streams shuffled patches to the UI so RX rebuilds progressively.
+    piece_size — (h, w) for each patch; defaults to NEURAL_BYPASS_PIECE_SIZE.
     """
+    if piece_size is None:
+        piece_size = NEURAL_BYPASS_PIECE_SIZE
+
     def _async_sleep(d: float):
         try:
             socketio.sleep(d)
@@ -529,7 +580,7 @@ def _neural_bypass_worker(saved: list[tuple[str, str]], piece_delay_s: float):
                 per_csi[sc] = np.array(pil_out.convert("RGB"), dtype=np.uint8)
 
                 # --- metrics: init + quality ---
-                ph, pw = NEURAL_BYPASS_PIECE_SIZE
+                ph, pw = piece_size
                 exp = (IMAGE_SIZE[0] // ph) * (IMAGE_SIZE[1] // pw)
                 if sc not in metrics_state:
                     init_metrics(sc, expected_pieces=exp)
@@ -540,13 +591,14 @@ def _neural_bypass_worker(saved: list[tuple[str, str]], piece_delay_s: float):
 
             if len(per_csi) == 1:
                 (sc, arr) = next(iter(per_csi.items()))
-                _stream_neural_decoded_pieces(sc, arr, piece_delay_s, _async_sleep)
+                _stream_neural_decoded_pieces(sc, arr, piece_delay_s, _async_sleep, piece_size=piece_size)
             else:
                 threads = []
                 for sc, arr in per_csi.items():
                     t = threading.Thread(
                         target=_stream_neural_decoded_pieces,
                         args=(sc, arr, piece_delay_s, time.sleep),
+                        kwargs={"piece_size": piece_size},
                         daemon=True,
                     )
                     threads.append(t)
@@ -563,14 +615,20 @@ def _neural_bypass_worker(saved: list[tuple[str, str]], piece_delay_s: float):
 
 
 def _continual_transmit_worker(
-    image_dir: str, csis: list[str], piece_delay_s: float, round_interval_s: float = 3.0
+    image_dir: str, csis: list[str], piece_delay_s: float, round_interval_s: float = 3.0,
+    hf_dataset_name: str = "", time_delay_mode: bool = False,
+    piece_size: Optional[tuple[int, int]] = None,
 ):
     """
     Continual transmission mode:
-    - Each round, sample len(csis) random images from *image_dir*.
+    - Each round, sample len(csis) random images from *image_dir* (or *hf_dataset_name*).
     - Encode / decode through JSCE and stream patches to the UI.
     - Per-round originals are set so SSIM/PSNR track fresh images each round.
+    - When *time_delay_mode* is True: no chunking; record encode/decode time and emit full image.
+    piece_size — (h, w) for each patch; defaults to NEURAL_BYPASS_PIECE_SIZE.
     """
+    if piece_size is None:
+        piece_size = NEURAL_BYPASS_PIECE_SIZE
     from image_detach_rebuild import detach_image_patches
 
     def _sleep(d: float):
@@ -579,74 +637,120 @@ def _continual_transmit_worker(
         except Exception:
             time.sleep(d)
 
+    # --- HF dataset init (once) ---
+    hf_dataset = None
+    hf_dataset_size = 0
+    if hf_dataset_name:
+        try:
+            from datasets import load_dataset
+            hf_dataset = load_dataset(
+                hf_dataset_name,
+                cache_dir=HF_DATASET_CACHE_DIR,
+                split="train",
+            )
+            hf_dataset_size = len(hf_dataset)
+            socketio.emit(
+                "tx_status",
+                {"message": f"Loaded HF dataset '{hf_dataset_name}' ({hf_dataset_size} samples)."},
+            )
+        except Exception as e:
+            socketio.emit(
+                "tx_status",
+                {"message": f"HF dataset load failed: {e}"},
+            )
+            return
+
     try:
         codec = _get_jsce_codec()
         round_num = 0
         while not send_stop_flag.is_set():
             round_num += 1
 
-            # list valid images
-            valid_exts = (".png", ".jpg", ".jpeg", ".bmp", ".tiff")
-            try:
-                all_files = sorted(
-                    f for f in os.listdir(image_dir)
-                    if f.lower().endswith(valid_exts)
-                )
-            except FileNotFoundError:
-                socketio.emit("tx_status", {"message": f"Directory not found: {image_dir}"})
-                _sleep(round_interval_s)
-                continue
+            # --- get source images ---
+            if hf_dataset is not None:
+                # Sample from HuggingFace dataset
+                n_links = len(csis)
+                if hf_dataset_size < n_links:
+                    socketio.emit(
+                        "tx_status",
+                        {"message": f"HF dataset has {hf_dataset_size} samples, need {n_links}."},
+                    )
+                    _sleep(round_interval_s)
+                    continue
+                indices = random.sample(range(hf_dataset_size), n_links)
+                hf_rows = [hf_dataset[i] for i in indices]
+                # Determine image key (common keys: "image", "img", "png")
+                image_key = "image" if "image" in hf_rows[0] else (next(k for k in ("img", "png") if k in hf_rows[0]))
+                selected_files = [f"hf_{i}" for i in indices]
+                basenames = [f"hf_{i}" for i in indices]
+                pil_images = []
+                for row in hf_rows:
+                    img = row[image_key]
+                    if not isinstance(img, Image.Image):
+                        img = Image.open(img).convert("RGB")
+                    pil_images.append(img.convert("RGB"))
+            else:
+                # List valid images from directory
+                valid_exts = (".png", ".jpg", ".jpeg", ".bmp", ".tiff")
+                try:
+                    all_files = sorted(
+                        f for f in os.listdir(image_dir)
+                        if f.lower().endswith(valid_exts)
+                    )
+                except FileNotFoundError:
+                    socketio.emit("tx_status", {"message": f"Directory not found: {image_dir}"})
+                    _sleep(round_interval_s)
+                    continue
 
-            n_links = len(csis)
-            if len(all_files) < n_links:
-                socketio.emit(
-                    "tx_status",
-                    {"message": f"Round {round_num}: need {n_links} images, found {len(all_files)}. Retrying..."},
-                )
-                _sleep(round_interval_s)
-                continue
+                n_links = len(csis)
+                if len(all_files) < n_links:
+                    socketio.emit(
+                        "tx_status",
+                        {"message": f"Round {round_num}: need {n_links} images, found {len(all_files)}. Retrying..."},
+                    )
+                    _sleep(round_interval_s)
+                    continue
 
-            # sample random images for this round
-            selected = random.sample(all_files, n_links)
-            basenames = [os.path.splitext(f)[0] for f in selected]
+                selected = random.sample(all_files, n_links)
+                basenames = [os.path.splitext(f)[0] for f in selected]
+                selected_files = selected
+                pil_images = []
+                for f in selected:
+                    pil_images.append(Image.open(os.path.join(image_dir, f)).convert("RGB"))
 
-            # load originals + build codec input
+            # --- load originals + build codec input ---
             image_dict: dict[str, Image.Image] = {}
             round_originals: dict[str, np.ndarray] = {}
             for i, csi in enumerate(csis):
                 sc = str(csi)
-                path = os.path.join(image_dir, selected[i])
-                pil = Image.open(path).convert("RGB")
-                image_dict[sc] = pil
+                image_dict[sc] = pil_images[i]
                 round_originals[sc] = np.array(
-                    pil.resize((IMAGE_SIZE[1], IMAGE_SIZE[0])), dtype=np.uint8
+                    pil_images[i].resize((IMAGE_SIZE[1], IMAGE_SIZE[0])), dtype=np.uint8
                 )
 
             # swap originals for quality comparison
             original_images.clear()
             original_images.update(round_originals)
 
-            # reset receiver buffers and metrics
-            for csi in csis:
-                reconstructed_images.pop(csi, None)
-                metrics_state.pop(csi, None)
-                _metrics_last_emit.pop(csi, None)
-
-            socketio.emit("rx_reset", {"csis": list(csis)})
             socketio.emit("round_update", {"round": round_num, "files": basenames, "csis": list(csis)})
             socketio.emit(
                 "tx_status",
                 {"message": f"Round {round_num}/∞: {', '.join(basenames)}"},
             )
 
-            # encode merged latent
+            # --- encode merged latent (timed) ---
+            t0 = time.perf_counter()
             latent = codec.img2msg(image_dict)
+            encode_time = time.perf_counter() - t0
 
-            # decode per CSI
+            # decode per CSI (timed individually for time delay mode)
             per_csi: dict[str, np.ndarray] = {}
+            decode_times: dict[str, float] = {}
             for csi in csis:
                 sc = str(csi)
+                t0 = time.perf_counter()
                 pil_out = codec.msg2img(latent, sc)
+                decode_times[sc] = time.perf_counter() - t0
                 pil_out = pil_out.resize(
                     (IMAGE_SIZE[1], IMAGE_SIZE[0]), Image.Resampling.LANCZOS
                 )
@@ -655,17 +759,18 @@ def _continual_transmit_worker(
             # stream patches (parallel for multiple links)
             if n_links == 1:
                 sc = csis[0]
-                ph, pw = NEURAL_BYPASS_PIECE_SIZE
+                ph, pw = piece_size
                 init_metrics(sc, expected_pieces=(IMAGE_SIZE[0] // ph) * (IMAGE_SIZE[1] // pw))
-                _stream_neural_decoded_pieces(sc, per_csi[sc], piece_delay_s, _sleep)
+                _stream_neural_decoded_pieces(sc, per_csi[sc], piece_delay_s, _sleep, piece_size=piece_size)
             else:
                 threads = []
                 for sc in csis:
-                    ph, pw = NEURAL_BYPASS_PIECE_SIZE
+                    ph, pw = piece_size
                     init_metrics(sc, expected_pieces=(IMAGE_SIZE[0] // ph) * (IMAGE_SIZE[1] // pw))
                     t = threading.Thread(
                         target=_stream_neural_decoded_pieces,
                         args=(sc, per_csi[sc], piece_delay_s, time.sleep),
+                        kwargs={"piece_size": piece_size},
                         daemon=True,
                     )
                     threads.append(t)
@@ -673,10 +778,40 @@ def _continual_transmit_worker(
                 for t in threads:
                     t.join()
 
+            # time-delay recording (if enabled — alongside normal chunking)
+            if time_delay_mode:
+                for sc in csis:
+                    ph, pw = piece_size
+                    expected = (IMAGE_SIZE[0] // ph) * (IMAGE_SIZE[1] // pw)
+                    total_time = encode_time + decode_times[sc]
+                    per_chunk_avg = total_time / expected if expected > 0 else total_time
+
+                    time_delay_data.setdefault(sc, []).append({
+                        "round": round_num,
+                        "encode_time": round(encode_time, 4),
+                        "decode_time": round(decode_times[sc], 4),
+                        "total_time": round(total_time, 4),
+                        "per_chunk_avg": round(per_chunk_avg, 6),
+                    })
+
+                    history = time_delay_data.get(sc, [])
+                    mean_per_chunk = np.mean([h["per_chunk_avg"] for h in history]) if history else 0
+                    socketio.emit("time_delay_update", {
+                        "csi": sc,
+                        "round": round_num,
+                        "encode_time": round(encode_time, 4),
+                        "decode_time": round(decode_times[sc], 4),
+                        "total_time": round(total_time, 4),
+                        "per_chunk_avg": round(per_chunk_avg, 6),
+                        "mean_per_chunk_avg": round(mean_per_chunk, 6),
+                        "history": history[-200:],
+                    })
+
             socketio.emit(
                 "tx_status",
-                {"message": f"Round {round_num} done — {round_interval_s:.0f}s pause..."},
+                {"message": f"Round {round_num} done{', encode {:.3f}s'.format(encode_time) if time_delay_mode else ''} — {round_interval_s:.0f}s pause..."},
             )
+
             # pause between rounds
             steps = int(round_interval_s / 0.1)
             for _ in range(steps):
@@ -735,7 +870,14 @@ def handle_send_image():
     # --- Continual transmission mode ---
     if mode == "continual":
         image_dir = (request.form.get("image_dir") or "").strip()
-        if not image_dir or not os.path.isdir(image_dir):
+        hf_dataset_name = (request.form.get("hf_dataset_name") or "").strip()
+        use_hf = (request.form.get("use_hf_dataset") or "").strip() in ("1", "on", "true", "yes")
+        time_delay_mode = (request.form.get("time_delay_switch") or "").strip() in ("1", "on", "true", "yes")
+
+        if use_hf and hf_dataset_name:
+            # HF dataset mode: image_dir is optional
+            pass
+        elif not image_dir or not os.path.isdir(image_dir):
             return jsonify({"status": "error", "reason": f"Invalid image directory: {image_dir}"}), 400
 
         try:
@@ -756,26 +898,38 @@ def handle_send_image():
             piece_delay_ms = 25.0
         piece_delay_s = max(5.0, min(200.0, piece_delay_ms)) / 1000.0
 
+        try:
+            bypass_piece_size = int(request.form.get("bypass_piece_size") or 50)
+        except ValueError:
+            bypass_piece_size = 50
+        bypass_piece_size = max(10, min(300, bypass_piece_size))
+
         csis = list(selected_csis) if selected_csis else ["3-4"]
         for csi in csis:
             channel_states.setdefault(csi, {})["drop_prob_extra"] = extra_loss
             _compute_channel_state_for_csi(csi)
 
         _reset_rx_for_csis(csis)
+        # Reset time delay data when starting
+        time_delay_data.clear()
         socketio.emit(
             "canvas_state",
             {"nodes": nodes_state, "selected_csis": csis, "channel_states": channel_states},
         )
         send_stop_flag.clear()
         socketio.start_background_task(
-            _continual_transmit_worker, image_dir, csis, piece_delay_s, round_interval_s
+            _continual_transmit_worker, image_dir, csis, piece_delay_s, round_interval_s,
+            hf_dataset_name if use_hf else "", time_delay_mode,
+            piece_size=(bypass_piece_size, bypass_piece_size),
         )
+        links_info = f"HF dataset '{hf_dataset_name}'" if use_hf else f"dir '{image_dir}'"
+        mode_info = " (time delay viz)" if time_delay_mode else ""
         socketio.emit(
             "tx_status",
             {
                 "message": (
-                    f"Continual TX from {image_dir} ({len(csis)} link(s), "
-                    f"~{round_interval_s:.0f}s interval). Stop to end."
+                    f"Continual TX from {links_info} ({len(csis)} link(s), "
+                    f"~{round_interval_s:.0f}s interval{mode_info}). Stop to end."
                 )
             },
         )
@@ -810,6 +964,12 @@ def handle_send_image():
         piece_delay_ms = 25.0
     piece_delay_ms = max(5.0, min(200.0, piece_delay_ms))
     piece_delay_s = piece_delay_ms / 1000.0
+
+    try:
+        bypass_piece_size = int(request.form.get("bypass_piece_size") or 50)
+    except ValueError:
+        bypass_piece_size = 50
+    bypass_piece_size = max(10, min(150, bypass_piece_size))
 
     # multi-link: file_0 + csi_0, file_1 + csi_1, ...
     to_send: list[tuple[str, str]] = []
@@ -860,7 +1020,10 @@ def handle_send_image():
 
     if neural_bypass:
         send_stop_flag.clear()
-        socketio.start_background_task(_neural_bypass_worker, saved, piece_delay_s)
+        socketio.start_background_task(
+            _neural_bypass_worker, saved, piece_delay_s,
+            piece_size=(bypass_piece_size, bypass_piece_size),
+        )
         socketio.emit(
             "tx_status",
             {
