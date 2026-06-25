@@ -55,7 +55,7 @@ blocks:
     options: '[0, 1, 2, 3, 4, 5, 6, 7]'
     orient: Qt.QHBoxLayout
     type: int
-    value: '2'
+    value: '4'
     widget: radio_buttons
   states:
     bus_sink: false
@@ -75,27 +75,48 @@ blocks:
     label2: ''
     label3: ''
     label4: ''
-    labels: '[''  1 | 4100.0 | 11g'',''  2 | 2472.0 | 11g'', ''  3 | 3100.0 | 11g'',
-      ''  4 | 2600.0 | 11g'', ''  5 | 2880.0 | 11g'', ''  6 | 3020.0 | 11g'', ''  7
-      | 3160.0 | 11g'', ''  8 | 3300.0 | 11g'', ''  9 | 3440.0 | 11g'', ''  10 | 3580.0
-      | 11g'', ''  11 | 3720.0 | 11g'', ''  12 | 3860.0 | 11g'']'
+    labels: '[''915M'', ''  1 | 4100.0 | 11g'',''  2 | 2472.0 | 11g'', ''  3 | 3100.0
+      | 11g'', ''  4 | 2600.0 | 11g'', ''  5 | 2880.0 | 11g'', ''  6 | 3020.0 | 11g'',
+      ''  7 | 3160.0 | 11g'', ''  8 | 3300.0 | 11g'', ''  9 | 3440.0 | 11g'', ''  10
+      | 3580.0 | 11g'', ''  11 | 3720.0 | 11g'', ''  12 | 3860.0 | 11g'']'
     num_opts: '0'
     option0: '0'
     option1: '1'
     option2: '2'
     option3: '3'
     option4: '4'
-    options: "[4.10e+09, 2.472e+09, 3.10e+09, 2.60e+09, 2.88e+09, 3.02e+09,\n    \
-      \   3.16e+09, 3.30e+09, 3.44e+09, 3.58e+09, 3.72e+09, 3.86e+09]"
+    options: "[915000000.0, 4.10e+09, 2.472e+09, 3.10e+09, 2.60e+09, 2.88e+09, 3.02e+09,\n\
+      \       3.16e+09, 3.30e+09, 3.44e+09, 3.58e+09, 3.72e+09, 3.86e+09]"
     orient: Qt.QVBoxLayout
     type: real
-    value: '2600000000.0'
+    value: '915000000.0'
     widget: combo_box
   states:
     bus_sink: false
     bus_source: false
     bus_structure: null
     coordinate: [192, 12.0]
+    rotation: 0
+    state: disabled
+- name: freq
+  id: variable_qtgui_range
+  parameters:
+    comment: ''
+    gui_hint: ''
+    label: ''
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: '910000000'
+    step: '1000000'
+    stop: '3100000000'
+    value: '2500000000'
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [952, 8.0]
     rotation: 0
     state: enabled
 - name: interval
@@ -128,10 +149,10 @@ blocks:
     min_len: '200'
     orient: QtCore.Qt.Horizontal
     rangeType: float
-    start: '0.2'
+    start: '0.1'
     step: '0.05'
     stop: '0.6'
-    value: '0.5'
+    value: '0.1'
     widget: counter_slider
   states:
     bus_sink: false
@@ -235,7 +256,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [280, 368.0]
+    coordinate: [288, 368.0]
     rotation: 180
     state: enabled
 - name: blocks_vector_source_x_0
@@ -275,7 +296,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [280, 412.0]
+    coordinate: [288, 456.0]
     rotation: 0
     state: enabled
 - name: ieee802_11_mac_0
@@ -305,15 +326,15 @@ blocks:
     host: ''
     maxoutbuf: '0'
     minoutbuf: '0'
-    mtu: '10000'
-    port: '52001'
+    mtu: '65507'
+    port: '50010'
     tcp_no_delay: 'False'
     type: UDP_SERVER
   states:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [272, 252.0]
+    coordinate: [264, 248.0]
     rotation: 0
     state: enabled
 - name: qtgui_sink_x_0
@@ -321,10 +342,10 @@ blocks:
   parameters:
     affinity: ''
     alias: ''
-    bw: samp_rate
+    bw: samp_rate *2
     comment: ''
-    fc: '0'
-    fftsize: '1024'
+    fc: freq
+    fftsize: '2048'
     gui_hint: ''
     maxoutbuf: '0'
     minoutbuf: '0'
@@ -342,7 +363,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [520, 704.0]
+    coordinate: [512, 712.0]
     rotation: 0
     state: true
 - name: soapy_hackrf_sink_0
@@ -362,7 +383,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [520, 640.0]
+    coordinate: [528, 640.0]
     rotation: 0
     state: enabled
 - name: uhd_usrp_sink_0

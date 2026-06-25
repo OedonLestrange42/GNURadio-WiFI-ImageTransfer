@@ -74,24 +74,24 @@ blocks:
     label2: ''
     label3: ''
     label4: ''
-    labels: '[''  1 | 3100.0 | 11g'', ''  2 | 2600.0 | 11g'', ''  3 | 4100.0 | 11g'',
-      ''  4 | 2427.0 | 11g'', ''  5 | 2432.0 | 11g'', ''  6 | 2437.0 | 11g'', ''  7
-      | 2442.0 | 11g'', ''  8 | 2447.0 | 11g'', ''  9 | 2452.0 | 11g'', '' 10 | 2457.0
-      | 11g'', '' 11 | 2462.0 | 11g'', '' 12 | 2467.0 | 11g'', '' 13 | 2472.0 | 11g'',
-      '' 14 | 2484.0 | 11g'', '' 34 | 5170.0 | 11a'', '' 36 | 5180.0 | 11a'', '' 38
-      | 5190.0 | 11a'', '' 40 | 5200.0 | 11a'', '' 42 | 5210.0 | 11a'', '' 44 | 5220.0
-      | 11a'', '' 46 | 5230.0 | 11a'', '' 48 | 5240.0 | 11a'', '' 50 | 5250.0 | 11a'',
-      '' 52 | 5260.0 | 11a'', '' 54 | 5270.0 | 11a'', '' 56 | 5280.0 | 11a'', '' 58
-      | 5290.0 | 11a'', '' 60 | 5300.0 | 11a'', '' 62 | 5310.0 | 11a'', '' 64 | 5320.0
-      | 11a'', ''100 | 5500.0 | 11a'', ''102 | 5510.0 | 11a'', ''104 | 5520.0 | 11a'',
-      ''106 | 5530.0 | 11a'', ''108 | 5540.0 | 11a'', ''110 | 5550.0 | 11a'', ''112
-      | 5560.0 | 11a'', ''114 | 5570.0 | 11a'', ''116 | 5580.0 | 11a'', ''118 | 5590.0
-      | 11a'', ''120 | 5600.0 | 11a'', ''122 | 5610.0 | 11a'', ''124 | 5620.0 | 11a'',
-      ''126 | 5630.0 | 11a'', ''128 | 5640.0 | 11a'', ''132 | 5660.0 | 11a'', ''134
-      | 5670.0 | 11a'', ''136 | 5680.0 | 11a'', ''138 | 5690.0 | 11a'', ''140 | 5700.0
-      | 11a'', ''142 | 5710.0 | 11a'', ''144 | 5720.0 | 11a'', ''149 | 5745.0 | 11a
-      (SRD)'', ''151 | 5755.0 | 11a (SRD)'', ''153 | 5765.0 | 11a (SRD)'', ''155 |
-      5775.0 | 11a (SRD)'', ''157 | 5785.0 | 11a (SRD)'', ''159 | 5795.0 | 11a (SRD)'',
+    labels: '[''915M'', ''  1 | 3100.0 | 11g'', ''  2 | 2600.0 | 11g'', ''  3 | 4100.0
+      | 11g'', ''  4 | 2427.0 | 11g'', ''  5 | 2432.0 | 11g'', ''  6 | 2437.0 | 11g'',
+      ''  7 | 2442.0 | 11g'', ''  8 | 2447.0 | 11g'', ''  9 | 2452.0 | 11g'', '' 10
+      | 2457.0 | 11g'', '' 11 | 2462.0 | 11g'', '' 12 | 2467.0 | 11g'', '' 13 | 2472.0
+      | 11g'', '' 14 | 2484.0 | 11g'', '' 34 | 5170.0 | 11a'', '' 36 | 5180.0 | 11a'',
+      '' 38 | 5190.0 | 11a'', '' 40 | 5200.0 | 11a'', '' 42 | 5210.0 | 11a'', '' 44
+      | 5220.0 | 11a'', '' 46 | 5230.0 | 11a'', '' 48 | 5240.0 | 11a'', '' 50 | 5250.0
+      | 11a'', '' 52 | 5260.0 | 11a'', '' 54 | 5270.0 | 11a'', '' 56 | 5280.0 | 11a'',
+      '' 58 | 5290.0 | 11a'', '' 60 | 5300.0 | 11a'', '' 62 | 5310.0 | 11a'', '' 64
+      | 5320.0 | 11a'', ''100 | 5500.0 | 11a'', ''102 | 5510.0 | 11a'', ''104 | 5520.0
+      | 11a'', ''106 | 5530.0 | 11a'', ''108 | 5540.0 | 11a'', ''110 | 5550.0 | 11a'',
+      ''112 | 5560.0 | 11a'', ''114 | 5570.0 | 11a'', ''116 | 5580.0 | 11a'', ''118
+      | 5590.0 | 11a'', ''120 | 5600.0 | 11a'', ''122 | 5610.0 | 11a'', ''124 | 5620.0
+      | 11a'', ''126 | 5630.0 | 11a'', ''128 | 5640.0 | 11a'', ''132 | 5660.0 | 11a'',
+      ''134 | 5670.0 | 11a'', ''136 | 5680.0 | 11a'', ''138 | 5690.0 | 11a'', ''140
+      | 5700.0 | 11a'', ''142 | 5710.0 | 11a'', ''144 | 5720.0 | 11a'', ''149 | 5745.0
+      | 11a (SRD)'', ''151 | 5755.0 | 11a (SRD)'', ''153 | 5765.0 | 11a (SRD)'', ''155
+      | 5775.0 | 11a (SRD)'', ''157 | 5785.0 | 11a (SRD)'', ''159 | 5795.0 | 11a (SRD)'',
       ''161 | 5805.0 | 11a (SRD)'', ''165 | 5825.0 | 11a (SRD)'', ''172 | 5860.0 |
       11p'', ''174 | 5870.0 | 11p'', ''176 | 5880.0 | 11p'', ''178 | 5890.0 | 11p'',
       ''180 | 5900.0 | 11p'', ''182 | 5910.0 | 11p'', ''184 | 5920.0 | 11p'']'
@@ -101,27 +101,48 @@ blocks:
     option2: '2'
     option3: '3'
     option4: '4'
-    options: '[3100000000.0, 2600000000.0, 4100000000.0, 2427000000.0, 2432000000.0,
-      2437000000.0, 2442000000.0, 2447000000.0, 2452000000.0, 2457000000.0, 2462000000.0,
-      2467000000.0, 2472000000.0, 2484000000.0, 5170000000.0, 5180000000.0, 5190000000.0,
-      5200000000.0, 5210000000.0, 5220000000.0, 5230000000.0, 5240000000.0, 5250000000.0,
-      5260000000.0, 5270000000.0, 5280000000.0, 5290000000.0, 5300000000.0, 5310000000.0,
-      5320000000.0, 5500000000.0, 5510000000.0, 5520000000.0, 5530000000.0, 5540000000.0,
-      5550000000.0, 5560000000.0, 5570000000.0, 5580000000.0, 5590000000.0, 5600000000.0,
-      5610000000.0, 5620000000.0, 5630000000.0, 5640000000.0, 5660000000.0, 5670000000.0,
-      5680000000.0, 5690000000.0, 5700000000.0, 5710000000.0, 5720000000.0, 5745000000.0,
-      5755000000.0, 5765000000.0, 5775000000.0, 5785000000.0, 5795000000.0, 5805000000.0,
-      5825000000.0, 5860000000.0, 5870000000.0, 5880000000.0, 5890000000.0, 5900000000.0,
-      5910000000.0, 5920000000.0]'
+    options: '[915000000.0, 3100000000.0, 2600000000.0, 4100000000.0, 2427000000.0,
+      2432000000.0, 2437000000.0, 2442000000.0, 2447000000.0, 2452000000.0, 2457000000.0,
+      2462000000.0, 2467000000.0, 2472000000.0, 2484000000.0, 5170000000.0, 5180000000.0,
+      5190000000.0, 5200000000.0, 5210000000.0, 5220000000.0, 5230000000.0, 5240000000.0,
+      5250000000.0, 5260000000.0, 5270000000.0, 5280000000.0, 5290000000.0, 5300000000.0,
+      5310000000.0, 5320000000.0, 5500000000.0, 5510000000.0, 5520000000.0, 5530000000.0,
+      5540000000.0, 5550000000.0, 5560000000.0, 5570000000.0, 5580000000.0, 5590000000.0,
+      5600000000.0, 5610000000.0, 5620000000.0, 5630000000.0, 5640000000.0, 5660000000.0,
+      5670000000.0, 5680000000.0, 5690000000.0, 5700000000.0, 5710000000.0, 5720000000.0,
+      5745000000.0, 5755000000.0, 5765000000.0, 5775000000.0, 5785000000.0, 5795000000.0,
+      5805000000.0, 5825000000.0, 5860000000.0, 5870000000.0, 5880000000.0, 5890000000.0,
+      5900000000.0, 5910000000.0, 5920000000.0]'
     orient: Qt.QVBoxLayout
     type: real
-    value: '2600000000'
+    value: '915000000.0'
     widget: combo_box
   states:
     bus_sink: false
     bus_source: false
     bus_structure: null
     coordinate: [368, 12.0]
+    rotation: 0
+    state: disabled
+- name: freq
+  id: variable_qtgui_range
+  parameters:
+    comment: ''
+    gui_hint: ''
+    label: ''
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: '910000000'
+    step: '1000000'
+    stop: '3100000000'
+    value: '2500000000'
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1064, 16.0]
     rotation: 0
     state: enabled
 - name: gain
@@ -134,9 +155,9 @@ blocks:
     orient: QtCore.Qt.Horizontal
     rangeType: float
     start: '0'
-    step: '0.01'
+    step: '0.1'
     stop: '1'
-    value: '0.75'
+    value: '1'
     widget: counter_slider
   states:
     bus_sink: false
@@ -186,14 +207,14 @@ blocks:
     label2: ''
     label3: ''
     label4: ''
-    labels: '["1 MHz", "5 MHz", "10 MHz", "20 MHz"]'
+    labels: '["1 MHz", "2 MHz","3MHz", "5 MHz", "10 MHz", "20 MHz"]'
     num_opts: '0'
     option0: '0'
     option1: '1'
     option2: '2'
     option3: '3'
     option4: '4'
-    options: '[1e6, 5e6, 10e6, 20e6]'
+    options: '[1e6,2e6,3e6, 5e6, 10e6, 20e6]'
     orient: Qt.QVBoxLayout
     type: real
     value: 1e6
@@ -202,7 +223,28 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [728, 12.0]
+    coordinate: [744, 16.0]
+    rotation: 0
+    state: disabled
+- name: samp_rate
+  id: variable_qtgui_range
+  parameters:
+    comment: ''
+    gui_hint: ''
+    label: ''
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: 0.5e6
+    step: 0.1e6
+    stop: 2e6
+    value: 1e6
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [896, 16.0]
     rotation: 0
     state: enabled
 - name: sync_length
@@ -313,7 +355,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [560, 408.0]
+    coordinate: [568, 368.0]
     rotation: 0
     state: enabled
 - name: blocks_divide_xx_0
@@ -386,7 +428,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1040, 276.0]
+    coordinate: [1040, 280.0]
     rotation: 0
     state: enabled
 - name: blocks_multiply_xx_0
@@ -422,7 +464,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [840, 696.0]
+    coordinate: [848, 696.0]
     rotation: 0
     state: enabled
 - name: blocks_vector_to_stream_0_0
@@ -443,6 +485,24 @@ blocks:
     coordinate: [1080, 848.0]
     rotation: 0
     state: disabled
+- name: channels_iqbal_gen_0
+  id: channels_iqbal_gen
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    mag: '2'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    mode: '1'
+    phase: '2'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [360, 152.0]
+    rotation: 0
+    state: enabled
 - name: digital_probe_mpsk_snr_est_c_0
   id: digital_probe_mpsk_snr_est_c
   parameters:
@@ -558,7 +618,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1032, 884.0]
+    coordinate: [1024, 912.0]
     rotation: 180
     state: disabled
 - name: epy_block_2
@@ -586,8 +646,8 @@ blocks:
     affinity: ''
     alias: ''
     comment: ''
-    image_hight: '240'
-    image_width: '240'
+    image_hight: '300'
+    image_width: '300'
     maxoutbuf: '0'
     minoutbuf: '0'
   states:
@@ -634,7 +694,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [456, 832.0]
+    coordinate: [456, 824.0]
     rotation: 0
     state: enabled
 - name: ieee802_11_extract_csi_0
@@ -723,7 +783,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [232, 668.0]
+    coordinate: [232, 680.0]
     rotation: 0
     state: enabled
 - name: pdu_pdu_to_tagged_stream_0
@@ -832,7 +892,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [688, 1020.0]
+    coordinate: [720, 992.0]
     rotation: 0
     state: enabled
 - name: qtgui_const_sink_x_0_0
@@ -927,6 +987,127 @@ blocks:
     coordinate: [1296, 824.0]
     rotation: 0
     state: disabled
+- name: qtgui_const_sink_x_0_1
+  id: qtgui_const_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
+    autoscale: 'False'
+    axislabels: 'True'
+    color1: '"blue"'
+    color10: '"red"'
+    color2: '"red"'
+    color3: '"red"'
+    color4: '"red"'
+    color5: '"red"'
+    color6: '"red"'
+    color7: '"red"'
+    color8: '"red"'
+    color9: '"red"'
+    comment: ''
+    grid: 'False'
+    gui_hint: ''
+    label1: ''
+    label10: ''
+    label2: ''
+    label3: ''
+    label4: ''
+    label5: ''
+    label6: ''
+    label7: ''
+    label8: ''
+    label9: ''
+    legend: 'True'
+    marker1: '0'
+    marker10: '0'
+    marker2: '0'
+    marker3: '0'
+    marker4: '0'
+    marker5: '0'
+    marker6: '0'
+    marker7: '0'
+    marker8: '0'
+    marker9: '0'
+    name: '"Rx signal"'
+    nconnections: '1'
+    size: 48*10
+    style1: '0'
+    style10: '0'
+    style2: '0'
+    style3: '0'
+    style4: '0'
+    style5: '0'
+    style6: '0'
+    style7: '0'
+    style8: '0'
+    style9: '0'
+    tr_chan: '0'
+    tr_level: '0.0'
+    tr_mode: qtgui.TRIG_MODE_FREE
+    tr_slope: qtgui.TRIG_SLOPE_POS
+    tr_tag: '""'
+    type: complex
+    update_time: '0.10'
+    width1: '1'
+    width10: '1'
+    width2: '1'
+    width3: '1'
+    width4: '1'
+    width5: '1'
+    width6: '1'
+    width7: '1'
+    width8: '1'
+    width9: '1'
+    xmax: '2'
+    xmin: '-2'
+    ymax: '2'
+    ymin: '-2'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [808, 584.0]
+    rotation: 0
+    state: disabled
+- name: qtgui_sink_x_0
+  id: qtgui_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    bw: samp_rate
+    comment: ''
+    fc: freq
+    fftsize: '1024'
+    gui_hint: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    name: '""'
+    plotconst: 'True'
+    plotfreq: 'True'
+    plottime: 'True'
+    plotwaterfall: 'True'
+    rate: '10'
+    showports: 'False'
+    showrf: 'True'
+    type: complex
+    wintype: window.WIN_BLACKMAN_hARRIS
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1280, 408.0]
+    rotation: 0
+    state: true
 - name: qtgui_time_sink_x_0
   id: qtgui_time_sink_x
   parameters:
@@ -1021,7 +1202,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1344, 92.0]
+    coordinate: [1344, 96.0]
     rotation: 180
     state: enabled
 - name: soapy_hackrf_source_0
@@ -1480,7 +1661,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [216, 184.0]
+    coordinate: [136, 200.0]
     rotation: 0
     state: enabled
 - name: virtual_sink_0
@@ -1506,7 +1687,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [464, 472.0]
+    coordinate: [480, 416.0]
     rotation: 180
     state: true
 - name: virtual_sink_0_1
@@ -1599,11 +1780,15 @@ connections:
 - [blocks_divide_xx_0, '0', virtual_sink_0, '0']
 - [blocks_moving_average_xx_0, '0', blocks_divide_xx_0, '1']
 - [blocks_moving_average_xx_1, '0', blocks_complex_to_mag_0, '0']
+- [blocks_moving_average_xx_1, '0', qtgui_sink_x_0, '0']
 - [blocks_moving_average_xx_1, '0', virtual_sink_0_1, '0']
 - [blocks_multiply_xx_0, '0', blocks_moving_average_xx_1, '0']
 - [blocks_stream_to_vector_0, '0', fft_vxx_0, '0']
 - [blocks_vector_to_stream_0_0, '0', epy_block_0, '0']
 - [blocks_vector_to_stream_0_0, '0', qtgui_const_sink_x_0_0, '0']
+- [channels_iqbal_gen_0, '0', blocks_complex_to_mag_squared_0, '0']
+- [channels_iqbal_gen_0, '0', blocks_delay_0_0, '0']
+- [channels_iqbal_gen_0, '0', blocks_multiply_xx_0, '0']
 - [digital_probe_mpsk_snr_est_c_0, snr, blocks_message_debug_0, print]
 - [fft_vxx_0, '0', virtual_sink_1, '0']
 - [ieee802_11_decode_mac_0, out, epy_block_2, MAC]
@@ -1613,6 +1798,7 @@ connections:
 - [ieee802_11_frame_equalizer_0, symbols, pdu_pdu_to_tagged_stream_0, pdus]
 - [ieee802_11_parse_mac_0, out, ieee802_11_extract_csi_0, pdu in]
 - [ieee802_11_sync_long_0, '0', blocks_stream_to_vector_0, '0']
+- [ieee802_11_sync_long_0, '0', qtgui_const_sink_x_0_1, '0']
 - [ieee802_11_sync_short_0_0, '0', blocks_delay_0, '0']
 - [ieee802_11_sync_short_0_0, '0', ieee802_11_sync_long_0, '0']
 - [pdu_pdu_to_tagged_stream_0, '0', digital_probe_mpsk_snr_est_c_0, '0']
@@ -1620,9 +1806,7 @@ connections:
 - [soapy_hackrf_source_0, '0', blocks_complex_to_mag_squared_0, '0']
 - [soapy_hackrf_source_0, '0', blocks_delay_0_0, '0']
 - [soapy_hackrf_source_0, '0', blocks_multiply_xx_0, '0']
-- [uhd_usrp_source_0, '0', blocks_complex_to_mag_squared_0, '0']
-- [uhd_usrp_source_0, '0', blocks_delay_0_0, '0']
-- [uhd_usrp_source_0, '0', blocks_multiply_xx_0, '0']
+- [uhd_usrp_source_0, '0', channels_iqbal_gen_0, '0']
 - [virtual_source_0, '0', ieee802_11_sync_short_0_0, '0']
 - [virtual_source_0_1, '0', ieee802_11_sync_short_0_0, '1']
 - [virtual_source_0_2, '0', ieee802_11_sync_short_0_0, '2']

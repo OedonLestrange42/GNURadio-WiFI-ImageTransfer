@@ -970,7 +970,7 @@ blocks:
     maxoutbuf: '0'
     minoutbuf: '0'
   states:
-    _io_cache: ('Extract Pics', 'blk', [('image_hight', '240'), ('image_width', '240')],
+    _io_cache: ('Extract Pics', 'blk', [('image_hight', '300'), ('image_width', '300')],
       [('MAC', 'message', 1)], [], '', [])
     bus_sink: false
     bus_source: false
@@ -1169,7 +1169,7 @@ blocks:
     host: ''
     maxoutbuf: '0'
     minoutbuf: '0'
-    mtu: '1024'
+    mtu: '65507'
     port: '50010'
     tcp_no_delay: 'False'
     type: UDP_SERVER

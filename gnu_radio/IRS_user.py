@@ -18,7 +18,6 @@ sys.path.append(os.environ.get('GRC_HIER_PATH', os.path.expanduser('~/.grc_gnura
 
 from PyQt5.QtCore import QObject, pyqtSlot
 from gnuradio import blocks
-import pmt
 from gnuradio import gr
 from gnuradio.filter import firdes
 from gnuradio.fft import window
@@ -27,6 +26,7 @@ from PyQt5 import Qt
 from argparse import ArgumentParser
 from gnuradio.eng_arg import eng_float, intx
 from gnuradio import eng_notation
+from gnuradio import network
 from gnuradio import soapy
 from gnuradio.qtgui import Range, RangeWidget
 from PyQt5 import QtCore
@@ -76,10 +76,10 @@ class IRS_user(gr.top_block, Qt.QWidget):
         self.samp_rate = samp_rate = 1e6
         self.pdu_length = pdu_length = 50
         self.out_buf_size = out_buf_size = 96000
-        self.multi_const = multi_const = 0.5
+        self.multi_const = multi_const = 0.1
         self.interval = interval = 5
-        self.freq = freq = 2600000000.0
-        self.encoding = encoding = 2
+        self.freq = freq = 2500000000
+        self.encoding = encoding = 4
 
         ##################################################
         # Blocks
@@ -101,31 +101,12 @@ class IRS_user(gr.top_block, Qt.QWidget):
             lambda i: self.set_samp_rate(self._samp_rate_options[i]))
         # Create the radio buttons
         self.top_layout.addWidget(self._samp_rate_tool_bar)
-        self._pdu_length_range = Range(10, 500, 1, 50, 200)
-        self._pdu_length_win = RangeWidget(self._pdu_length_range, self.set_pdu_length, "'pdu_length'", "counter_slider", int, QtCore.Qt.Horizontal)
-        self.top_layout.addWidget(self._pdu_length_win)
-        self._multi_const_range = Range(0.2, 0.6, 0.05, 0.5, 200)
+        self._multi_const_range = Range(0.1, 0.6, 0.05, 0.1, 200)
         self._multi_const_win = RangeWidget(self._multi_const_range, self.set_multi_const, "'multi_const'", "counter_slider", float, QtCore.Qt.Horizontal)
         self.top_layout.addWidget(self._multi_const_win)
-        self._interval_range = Range(2, 1500, 1, 5, 200)
-        self._interval_win = RangeWidget(self._interval_range, self.set_interval, "'interval'", "counter_slider", int, QtCore.Qt.Horizontal)
-        self.top_layout.addWidget(self._interval_win)
-        # Create the options list
-        self._freq_options = [4100000000.0, 2472000000.0, 3100000000.0, 2600000000.0, 2880000000.0, 3020000000.0, 3160000000.0, 3300000000.0, 3440000000.0, 3580000000.0, 3720000000.0, 3860000000.0]
-        # Create the labels list
-        self._freq_labels = ['  1 | 4100.0 | 11g', '  2 | 2472.0 | 11g', '  3 | 3100.0 | 11g', '  4 | 2600.0 | 11g', '  5 | 2880.0 | 11g', '  6 | 3020.0 | 11g', '  7 | 3160.0 | 11g', '  8 | 3300.0 | 11g', '  9 | 3440.0 | 11g', '  10 | 3580.0 | 11g', '  11 | 3720.0 | 11g', '  12 | 3860.0 | 11g']
-        # Create the combo box
-        self._freq_tool_bar = Qt.QToolBar(self)
-        self._freq_tool_bar.addWidget(Qt.QLabel("'freq'" + ": "))
-        self._freq_combo_box = Qt.QComboBox()
-        self._freq_tool_bar.addWidget(self._freq_combo_box)
-        for _label in self._freq_labels: self._freq_combo_box.addItem(_label)
-        self._freq_callback = lambda i: Qt.QMetaObject.invokeMethod(self._freq_combo_box, "setCurrentIndex", Qt.Q_ARG("int", self._freq_options.index(i)))
-        self._freq_callback(self.freq)
-        self._freq_combo_box.currentIndexChanged.connect(
-            lambda i: self.set_freq(self._freq_options[i]))
-        # Create the radio buttons
-        self.top_layout.addWidget(self._freq_tool_bar)
+        self._freq_range = Range(910000000, 3100000000, 1000000, 2500000000, 200)
+        self._freq_win = RangeWidget(self._freq_range, self.set_freq, "'freq'", "counter_slider", float, QtCore.Qt.Horizontal)
+        self.top_layout.addWidget(self._freq_win)
         # Create the options list
         self._encoding_options = [0, 1, 2, 3, 4, 5, 6, 7]
         # Create the labels list
@@ -172,10 +153,10 @@ class IRS_user(gr.top_block, Qt.QWidget):
         self.soapy_hackrf_sink_0.set_gain(0, 'AMP', False)
         self.soapy_hackrf_sink_0.set_gain(0, 'VGA', min(max(16, 0.0), 47.0))
         self.qtgui_sink_x_0 = qtgui.sink_c(
-            1024, #fftsize
+            2048, #fftsize
             window.WIN_BLACKMAN_hARRIS, #wintype
-            0, #fc
-            samp_rate, #bw
+            freq, #fc
+            (samp_rate *2), #bw
             "", #name
             True, #plotfreq
             True, #plotwaterfall
@@ -189,20 +170,26 @@ class IRS_user(gr.top_block, Qt.QWidget):
         self.qtgui_sink_x_0.enable_rf_freq(True)
 
         self.top_layout.addWidget(self._qtgui_sink_x_0_win)
+        self._pdu_length_range = Range(10, 500, 1, 50, 200)
+        self._pdu_length_win = RangeWidget(self._pdu_length_range, self.set_pdu_length, "'pdu_length'", "counter_slider", int, QtCore.Qt.Horizontal)
+        self.top_layout.addWidget(self._pdu_length_win)
+        self.network_socket_pdu_0 = network.socket_pdu('UDP_SERVER', '', '50010', 65507, False)
+        self._interval_range = Range(2, 1500, 1, 5, 200)
+        self._interval_win = RangeWidget(self._interval_range, self.set_interval, "'interval'", "counter_slider", int, QtCore.Qt.Horizontal)
+        self.top_layout.addWidget(self._interval_win)
         self.ieee802_11_mac_0 = ieee802_11.mac([0x23, 0x23, 0x23, 0x23, 0x23, 0x23], [0x42, 0x42, 0x42, 0x42, 0x42, 0x42], [0xff, 0xff, 0xff, 0xff, 0xff, 255])
         self.foo_packet_pad2_0 = foo.packet_pad2(False, False, 0.01, 100, 1000)
         self.foo_packet_pad2_0.set_min_output_buffer(out_buf_size)
         self.blocks_vector_source_x_0 = blocks.vector_source_c((0,), False, 1, [])
         self.blocks_multiply_const_vxx_0 = blocks.multiply_const_cc(multi_const)
         self.blocks_multiply_const_vxx_0.set_min_output_buffer(100000)
-        self.blocks_message_strobe_0_0 = blocks.message_strobe(pmt.intern("x".join('y' for i in range(pdu_length))), interval)
 
 
         ##################################################
         # Connections
         ##################################################
-        self.msg_connect((self.blocks_message_strobe_0_0, 'strobe'), (self.ieee802_11_mac_0, 'app in'))
         self.msg_connect((self.ieee802_11_mac_0, 'phy out'), (self.wifi_phy_hier_0_0, 'mac_in'))
+        self.msg_connect((self.network_socket_pdu_0, 'pdus'), (self.ieee802_11_mac_0, 'app in'))
         self.connect((self.blocks_multiply_const_vxx_0, 0), (self.foo_packet_pad2_0, 0))
         self.connect((self.blocks_vector_source_x_0, 0), (self.wifi_phy_hier_0_0, 0))
         self.connect((self.foo_packet_pad2_0, 0), (self.qtgui_sink_x_0, 0))
@@ -224,7 +211,7 @@ class IRS_user(gr.top_block, Qt.QWidget):
     def set_samp_rate(self, samp_rate):
         self.samp_rate = samp_rate
         self._samp_rate_callback(self.samp_rate)
-        self.qtgui_sink_x_0.set_frequency_range(0, self.samp_rate)
+        self.qtgui_sink_x_0.set_frequency_range(self.freq, (self.samp_rate *2))
         self.soapy_hackrf_sink_0.set_sample_rate(0, self.samp_rate)
         self.wifi_phy_hier_0_0.set_bandwidth(self.samp_rate)
 
@@ -233,7 +220,6 @@ class IRS_user(gr.top_block, Qt.QWidget):
 
     def set_pdu_length(self, pdu_length):
         self.pdu_length = pdu_length
-        self.blocks_message_strobe_0_0.set_msg(pmt.intern("x".join('y' for i in range(self.pdu_length))))
 
     def get_out_buf_size(self):
         return self.out_buf_size
@@ -253,14 +239,13 @@ class IRS_user(gr.top_block, Qt.QWidget):
 
     def set_interval(self, interval):
         self.interval = interval
-        self.blocks_message_strobe_0_0.set_period(self.interval)
 
     def get_freq(self):
         return self.freq
 
     def set_freq(self, freq):
         self.freq = freq
-        self._freq_callback(self.freq)
+        self.qtgui_sink_x_0.set_frequency_range(self.freq, (self.samp_rate *2))
         self.soapy_hackrf_sink_0.set_frequency(0, self.freq)
         self.wifi_phy_hier_0_0.set_frequency(self.freq)
 

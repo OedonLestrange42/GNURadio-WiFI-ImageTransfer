@@ -245,7 +245,7 @@ class IRS_tranceiver(gr.top_block, Qt.QWidget):
         self._pdu_length_range = Range(10, 500, 1, 50, 200)
         self._pdu_length_win = RangeWidget(self._pdu_length_range, self.set_pdu_length, "'pdu_length'", "counter_slider", int, QtCore.Qt.Horizontal)
         self.top_layout.addWidget(self._pdu_length_win)
-        self.network_socket_pdu_0 = network.socket_pdu('UDP_SERVER', '', '50010', 1024, False)
+        self.network_socket_pdu_0 = network.socket_pdu('UDP_SERVER', '', '50010', 65507, False)
         # Create the options list
         self._lo_offset_options = [0, 6000000.0, 11000000.0]
         # Create the labels list
