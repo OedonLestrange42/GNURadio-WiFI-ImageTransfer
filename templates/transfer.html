@@ -59,6 +59,18 @@
 
                     <div class="row">
                         <div class="form-group">
+                            <label class="tx-neural-label">
+                                <input type="checkbox" id="sim_channel_effect" name="sim_channel_effect" value="1"
+                                    checked onchange="toggleSimChannelEffect()">
+                                Simulate channel effects (drop + noise before TX)
+                            </label>
+                            <div class="hint">When off, patches are sent unchanged — use real GNU Radio / WiFi
+                                impairments only. When on, Python applies distance-based drop and Gaussian noise.</div>
+                        </div>
+                    </div>
+
+                    <div class="row" id="simChannelOptionsRow">
+                        <div class="form-group">
                             <label for="packet_loss_pct">Extra packet loss (%):</label>
                             <input type="number" id="packet_loss_pct" name="packet_loss_pct" value="0" min="0" max="90"
                                 step="1">
@@ -278,6 +290,13 @@
             const isContinual = document.querySelector('input[name="mode"]:checked').value === 'continual';
             document.getElementById('userDefineSection').style.display = isContinual ? 'none' : '';
             document.getElementById('continualSection').style.display = isContinual ? '' : 'none';
+            
+            // Disable the hidden neural_bypass checkbox so it doesn't get submitted
+            const userDefineBypass = document.querySelector('#userDefineSection input[name="neural_bypass"]');
+            const continualBypass = document.querySelector('#continualSection input[name="neural_bypass"]');
+            if (userDefineBypass) userDefineBypass.disabled = isContinual;
+            if (continualBypass) continualBypass.disabled = !isContinual;
+            
             // toggle required on file inputs so validation doesn't block continual mode
             document.querySelectorAll('#txList input[type="file"]').forEach(el => {
                 el.required = !isContinual;
@@ -309,6 +328,14 @@
             const checked = document.getElementById('useHfDataset').checked;
             document.getElementById('hf_dataset_name').disabled = !checked;
             document.getElementById('image_dir').disabled = checked;
+        }
+
+        function toggleSimChannelEffect() {
+            const enabled = document.getElementById('sim_channel_effect').checked;
+            const row = document.getElementById('simChannelOptionsRow');
+            const lossInput = document.getElementById('packet_loss_pct');
+            if (row) row.style.opacity = enabled ? '' : '0.45';
+            if (lossInput) lossInput.disabled = !enabled;
         }
 
         function placeholderPixel() {
@@ -683,6 +710,8 @@
         renderTxList();
         renderRxGrid();
         resizeCanvas();
+        toggleTxMode(); // Initialize disabled state for neural_bypass checkboxes
+        toggleSimChannelEffect();
 
         // ----- Quantitative Metrics Charts -----
         const CSI_COLORS = ['#007aff', '#34c759', '#ff9500', '#ff3b30', '#af52de', '#5ac8fa', '#ff2d55'];
