@@ -1,44 +1,66 @@
-import pdb
+import struct
 
 import pmt
 import socket
-import numpy as np
-import pickle
 from gnuradio import gr
-from PIL import Image
 
 
-class blk(gr.sync_block):  # other base classes are basic_block, decim_block, interp_block
-    def __init__(self,
-                 image_hight: int = 300,
-                 image_width: int = 300):  # only default arguments here
+class blk(gr.sync_block):
+    """Forward decoded MAC MSDU image bytes to download_image_udp on localhost:10010."""
+
+    MAC_HEADER_LEN = 24
+    RX_HOST = "localhost"
+    RX_PORT = 10010
+
+    def __init__(self, image_hight: int = 300, image_width: int = 300):
         gr.basic_block.__init__(
             self,
-            name='Extract Pics',  # will be shown in GRC
+            name="Extract Pics",
             in_sig=None,
-            out_sig=None
+            out_sig=None,
         )
-        self.message_port_register_in(pmt.intern('MAC'))
-        self.set_msg_handler(pmt.intern('MAC'), self.handle_msg)
+        self.message_port_register_in(pmt.intern("MAC"))
+        self.set_msg_handler(pmt.intern("MAC"), self.handle_msg)
         self.skt = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.H = image_hight
         self.W = image_width
 
-    def handle_msg(self, msg):
-        # This is where you handle the message. You can access the data using pmt.to_python(msg).
-        # global patch_list
-        try:
-            data = pmt.to_python(msg)[-1]
-            # print(data)
-            # pdb.set_trace()
-            target = data[24:]  # loaded data
-            pics = target[4:]
-            
-            img = bytes(pics)
-            # img = pickle.dumps(pics)
-            self.skt.sendto(img, ('localhost', 10010))
-        except UnicodeDecodeError as e:
-            print(f"An error occurred: {e}")
-            # pass
-        # print(f'msg received, current msg list length {len(patch_list)}')
+    @staticmethod
+    def _to_bytes(data) -> bytes:
+        if isinstance(data, bytes):
+            return data
+        if isinstance(data, bytearray):
+            return bytes(data)
+        if isinstance(data, str):
+            return data.encode("latin1")
+        return bytes(data)
 
+    def _extract_image_payload(self, data: bytes) -> bytes:
+        if len(data) < self.MAC_HEADER_LEN + 4:
+            raise ValueError(
+                f"frame too short ({len(data)} B); need at least "
+                f"{self.MAC_HEADER_LEN + 4} B (MAC header + length prefix)"
+            )
+        target = data[self.MAC_HEADER_LEN:]
+        (payload_len,) = struct.unpack("=L", target[:4])
+        payload = target[4:]
+        if 0 < payload_len <= len(payload):
+            return payload[:payload_len]
+        return payload
+
+    def handle_msg(self, msg):
+        try:
+            parsed = pmt.to_python(msg)
+            if isinstance(parsed, (tuple, list)):
+                data = parsed[-1]
+            else:
+                data = parsed
+            raw = self._to_bytes(data)
+            img = self._extract_image_payload(raw)
+            if not img:
+                print("Extract Pics: empty image payload after header strip")
+                return
+            self.skt.sendto(img, (self.RX_HOST, self.RX_PORT))
+            print(f"Extract Pics: forwarded {len(img)} B to {self.RX_HOST}:{self.RX_PORT}")
+        except Exception as e:
+            print(f"Extract Pics error: {e}")

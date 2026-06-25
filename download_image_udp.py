@@ -1,11 +1,13 @@
 try:
     import eventlet  # type: ignore
+
     eventlet.monkey_patch()
     _ASYNC_MODE = "eventlet"
 except Exception:
     eventlet = None
     _ASYNC_MODE = "threading"
 
+import collections
 import socket
 import pickle
 import struct
@@ -26,6 +28,10 @@ from typing import Optional
 HOST = 'localhost'
 PORT = 10010
 GNURADIO_PDU_PORT = 50010  # GNU Radio IRS_tranceiver network_socket_pdu input
+# socket_pdu MTU in gnu_radio/*.grc (UDP receive buffer); not the WiFi MAC limit.
+GNURADIO_SOCKET_MTU = 65507
+# ieee802_11 MAC rejects application payloads larger than this (see mac block error).
+GNURADIO_MAC_MSDU_MAX = 1500
 IMAGE_SIZE = (300, 300, 3)
 UPLOAD_FOLDER = 'uploads'
 # JSCE (same defaults as upload_featuremap_udp.py / download_featuremap_udp.py)
@@ -37,6 +43,17 @@ CODEC_CHECKPOINT = os.path.join(
 )
 CODEC_IMG_SIZE = (240, 240)
 CODEC_COMPRESSED_CH = 128
+LATENT_SHAPE = (
+    CODEC_IMG_SIZE[0] // 8,
+    CODEC_IMG_SIZE[1] // 8,
+    CODEC_COMPRESSED_CH,
+)
+# Latent patch auto-sized to fill ~1500 B 802.11 MSDU (see _resolve_gnuradio_latent_piece_size).
+GNURADIO_LATENT_WIRE_DTYPE = np.float16
+GNURADIO_LATENT_PREVIEW_MIN_INTERVAL_S = 0.4
+_gnuradio_latent_piece_size_cache: Optional[tuple[int, int]] = None
+_gnuradio_latent_preview_milestone: int = -1
+_gnuradio_latent_last_preview_ts: float = 0.0
 _jsce_codec = None
 _jsce_lock = threading.Lock()
 
@@ -52,8 +69,23 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode=_ASYNC_MODE)
 stop_thread = False  # receiver stop flag
+receiver_task_running = False
 # multi-link reconstruction (keyed by CSI like "13-14")
 reconstructed_images: dict[str, np.ndarray] = {}
+# GNU Radio + JSCE: persistent merged latent; patches update regions in-place.
+active_gnuradio_csis: list[str] = []
+_gnuradio_rx_lock = threading.Lock()
+_gnuradio_rx_csi_queue: collections.deque[str] = collections.deque()
+merged_latent = np.zeros(LATENT_SHAPE, dtype=np.float32)
+_gnuradio_latent_lock = threading.Lock()
+# Latent round tracking (patches vs grid cells are different counts — do not mix them).
+_gnuradio_latent_received_keys: set[tuple[int, int]] = set()
+_gnuradio_latent_patches_received: int = 0
+_gnuradio_latent_patches_expected: int = 0
+_gnuradio_latent_cells_expected: int = LATENT_SHAPE[0] * LATENT_SHAPE[1]
+_gnuradio_latent_tx_generation: int = 0
+_gnuradio_latent_rx_generation: int = 0
+_gnuradio_latent_round_decoded: bool = False
 
 # --- quantitative metrics ---
 original_images: dict[str, np.ndarray] = {}
@@ -74,9 +106,141 @@ nodes_state = [
 # default static CSI from your existing scripts (`upload_featuremap_udp.py`/`download_featuremap_udp.py`)
 selected_csis: list[str] = ["3-4", "13-10"]
 channel_states: dict[str, dict] = {}
+# When False, latent/RGB pieces pass through without toy drop/noise (real GNU Radio path only).
+_sim_channel_effect_enabled: bool = True
 # Slightly slower Socket.IO emit after each UDP piece so the browser can paint incremental rebuilds.
 RX_PIECE_EMIT_DELAY_S = 0.03
 UDP_RECV_BUF = 65535
+
+
+def _len_prefixed_packet(payload: bytes) -> bytes:
+    return struct.pack("=L", len(payload)) + payload
+
+
+def _pickle_jsce_latent_payload(
+        piece,
+        tx_gen: int = 0,
+        expected_patches: int = 0,
+) -> bytes:
+    (pos, arr) = piece
+    arr_wire = np.asarray(arr, dtype=GNURADIO_LATENT_WIRE_DTYPE)
+    return pickle.dumps(
+        {
+            "payload_type": "jsce_latent",
+            "piece": (pos, arr_wire),
+            "wire_dtype": str(GNURADIO_LATENT_WIRE_DTYPE),
+            "tx_gen": int(tx_gen),
+            "expected_patches": int(expected_patches),
+        },
+        protocol=pickle.HIGHEST_PROTOCOL,
+    )
+
+
+def _jsce_latent_meta_from_obj(obj: dict) -> dict:
+    return {
+        "tx_gen": int(obj.get("tx_gen", 0)),
+        "expected_patches": int(obj.get("expected_patches", 0)),
+    }
+
+
+def _normalize_latent_piece_from_wire(piece):
+    (pos, arr) = piece
+    return (pos, np.asarray(arr, dtype=np.float32))
+
+
+def _estimate_gnuradio_latent_piece_packet_bytes(piece_h: int, piece_w: int) -> int:
+    """Wire size for one spatial JSCE latent patch (float16 on wire) + 4-byte length header."""
+    piece = (((0, 0, 0), np.zeros((piece_h, piece_w, CODEC_COMPRESSED_CH), dtype=GNURADIO_LATENT_WIRE_DTYPE)))
+    return len(_len_prefixed_packet(_pickle_jsce_latent_payload(piece)))
+
+
+def _find_optimal_gnuradio_latent_piece_size(mtu: int = GNURADIO_MAC_MSDU_MAX) -> tuple[int, int]:
+    """Largest (h, w) patch whose pickled float16 payload fits in the 802.11 MSDU budget."""
+    lh, lw = LATENT_SHAPE[0], LATENT_SHAPE[1]
+    best = (1, 1)
+    best_bytes = 0
+    for ph in range(1, lh + 1):
+        for pw in range(1, lw + 1):
+            nbytes = _estimate_gnuradio_latent_piece_packet_bytes(ph, pw)
+            if nbytes > mtu:
+                continue
+            area = ph * pw
+            if nbytes > best_bytes or (nbytes == best_bytes and area > best[0] * best[1]):
+                best_bytes = nbytes
+                best = (ph, pw)
+    return best
+
+
+def _resolve_gnuradio_latent_piece_size(
+        user_hint: Optional[tuple[int, int]] = None,
+        mtu: int = GNURADIO_MAC_MSDU_MAX,
+) -> tuple[int, int]:
+    """
+    Pick the largest MTU-filling latent patch, optionally capped by user_hint dimensions.
+    Result is cached until process restart.
+    """
+    global _gnuradio_latent_piece_size_cache
+    optimal = _find_optimal_gnuradio_latent_piece_size(mtu)
+    if user_hint is None:
+        if _gnuradio_latent_piece_size_cache is None:
+            _gnuradio_latent_piece_size_cache = optimal
+        return _gnuradio_latent_piece_size_cache
+
+    uh, uw = int(user_hint[0]), int(user_hint[1])
+    chosen = (
+        max(1, min(optimal[0], uh, LATENT_SHAPE[0])),
+        max(1, min(optimal[1], uw, LATENT_SHAPE[1])),
+    )
+    while _estimate_gnuradio_latent_piece_packet_bytes(chosen[0], chosen[1]) > mtu:
+        if chosen[0] > 1:
+            chosen = (chosen[0] - 1, chosen[1])
+        elif chosen[1] > 1:
+            chosen = (chosen[0], chosen[1] - 1)
+        else:
+            break
+    return chosen
+
+
+def _max_gnuradio_latent_piece_side(mtu: int = GNURADIO_MAC_MSDU_MAX) -> int:
+    ph, _pw = _find_optimal_gnuradio_latent_piece_size(mtu)
+    return ph
+
+
+def _coerce_gnuradio_latent_piece_size(piece_size: tuple[int, int]) -> tuple[int, int]:
+    """Backward-compatible alias: cap optimal patch by UI hint."""
+    return _resolve_gnuradio_latent_piece_size(user_hint=piece_size)
+
+
+def _expected_latent_pieces(piece_size: tuple[int, int]) -> int:
+    ph, pw = piece_size
+    lh, lw = LATENT_SHAPE[0], LATENT_SHAPE[1]
+    return max(1, (lh // ph) * (lw // pw))
+
+
+def _gnuradio_latent_piece_size_error(piece_size: tuple[int, int], mtu: int = GNURADIO_MAC_MSDU_MAX) -> Optional[str]:
+    ph, pw = piece_size
+    packet_bytes = _estimate_gnuradio_latent_piece_packet_bytes(ph, pw)
+    if packet_bytes <= mtu:
+        return None
+    opt = _find_optimal_gnuradio_latent_piece_size(mtu)
+    return (
+        f"JSCE latent patch {ph}x{pw} (all {CODEC_COMPRESSED_CH} ch, float16 wire) produces "
+        f"~{packet_bytes} B packets, but the GNU Radio 802.11 MAC limit is {mtu} B per frame. "
+        f"Max fitting patch is {opt[0]}x{opt[1]} (~{_estimate_gnuradio_latent_piece_packet_bytes(*opt)} B)."
+    )
+
+
+def _latent_spatial_coverage_keys(piece) -> set[tuple[int, int]]:
+    """Grid cells (y, x) filled by one latent patch (multi- or single-channel)."""
+    (y, x, c), arr = piece
+    ph, pw = int(arr.shape[0]), int(arr.shape[1])
+    if arr.ndim == 3 and int(arr.shape[2]) == 1:
+        return {(int(y), int(x))}
+    keys: set[tuple[int, int]] = set()
+    for dy in range(ph):
+        for dx in range(pw):
+            keys.add((int(y) + dy, int(x) + dx))
+    return keys
 
 
 def _safe_unpack_len_prefixed(data: bytes) -> bytes:
@@ -95,34 +259,67 @@ def _safe_unpack_len_prefixed(data: bytes) -> bytes:
     return data
 
 
+def _is_latent_piece_array(arr) -> bool:
+    if not hasattr(arr, "shape") or len(arr.shape) != 3:
+        return False
+    if not np.issubdtype(getattr(arr, "dtype", np.float32), np.floating):
+        return False
+    ch = int(arr.shape[2])
+    return ch == 1 or ch == CODEC_COMPRESSED_CH
+
+
+def _latent_piece_message(piece, tx_gen: int = 0, expected_patches: int = 0) -> dict:
+    return {
+        "piece": _normalize_latent_piece_from_wire(piece),
+        "tx_gen": int(tx_gen),
+        "expected_patches": int(expected_patches),
+    }
+
+
 def _try_decode_udp(data: bytes):
     """
     Returns one of:
-      ("piece", ((y,x,c), piece_array))
+      ("piece_csi", (csi, piece))
+      ("piece", piece)
+      ("latent_piece", piece)
       ("jpeg", pil_image_rgb)
       ("none", None)
     """
     payload = _safe_unpack_len_prefixed(data)
 
-    # 1) pickle piece
+    # 1) pickle piece / JSCE latent
     try:
         obj = pickle.loads(payload)
 
-        # multi-link formats:
+        if isinstance(obj, dict) and obj.get("payload_type") == "jsce_latent" and "piece" in obj:
+            piece = obj.get("piece")
+            if isinstance(piece, tuple) and len(piece) == 2 and isinstance(piece[0], tuple) and len(piece[0]) == 3:
+                return (
+                    "latent_piece",
+                    _latent_piece_message(piece, **_jsce_latent_meta_from_obj(obj)),
+                )
+
+        # multi-link RGB formats (legacy / neural bypass over UDP):
         #  - {"csi": "13-14", "piece": ((y,x,c), arr)}
         #  - ("13-14", ((y,x,c), arr))
         if isinstance(obj, dict) and "piece" in obj and "csi" in obj:
             csi = str(obj.get("csi"))
             piece = obj.get("piece")
             if isinstance(piece, tuple) and len(piece) == 2 and isinstance(piece[0], tuple) and len(piece[0]) == 3:
+                if _is_latent_piece_array(piece[1]):
+                    return ("latent_piece", _latent_piece_message(piece))
                 return ("piece_csi", (csi, piece))
         if isinstance(obj, tuple) and len(obj) == 2 and isinstance(obj[0], str):
             csi = obj[0]
             piece = obj[1]
             if isinstance(piece, tuple) and len(piece) == 2 and isinstance(piece[0], tuple) and len(piece[0]) == 3:
+                if _is_latent_piece_array(piece[1]):
+                    return ("latent_piece", _latent_piece_message(piece))
                 return ("piece_csi", (csi, piece))
 
         if isinstance(obj, tuple) and len(obj) == 2 and isinstance(obj[0], tuple) and len(obj[0]) == 3:
+            if _is_latent_piece_array(obj[1]):
+                return ("latent_piece", _latent_piece_message(obj))
             return ("piece", obj)
     except Exception:
         pass
@@ -299,6 +496,13 @@ def _estimate_piece_bytes(csi: str, piece) -> int:
 
 # -----------------------------------------------------------------------------------
 
+def _form_flag(name: str, default: bool = False) -> bool:
+    raw = request.form.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "on", "true", "yes")
+
+
 def _apply_channel_effect(piece, csi: str):
     """
     Apply a lightweight, visually-obvious "channel" effect to a piece:
@@ -309,6 +513,9 @@ def _apply_channel_effect(piece, csi: str):
     spatial patch is not permanently lost due to a fixed (y, x) seed.
     Returns None when the piece is dropped.
     """
+    if not _sim_channel_effect_enabled:
+        return piece
+
     (y, x, c), val = piece
 
     st = channel_states.get(csi) or {"snr_db": 25.0, "seed": 42, "drop_prob": 0.0}
@@ -324,15 +531,208 @@ def _apply_channel_effect(piece, csi: str):
     return ((y, x, c), out)
 
 
+def _apply_channel_effect_latent(piece, csi: str):
+    """Toy channel on JSCE latent patches (float32); returns None when dropped."""
+    if not _sim_channel_effect_enabled:
+        return piece
+
+    (y, x, c), val = piece
+    st = channel_states.get(csi) or {"snr_db": 25.0, "seed": 42, "drop_prob": 0.0}
+    if random.random() < float(st.get("drop_prob", 0.0)):
+        return None
+    snr_db = float(st.get("snr_db", 25.0))
+    sigma = max(0.005, 0.35 * (10.0 ** (-snr_db / 20.0)))
+    noise = np.random.normal(0.0, sigma, size=val.shape).astype(np.float32)
+    out = val.astype(np.float32) + noise
+    return ((y, x, c), out)
+
+
+def _begin_gnuradio_latent_round(tx_gen: int, expected_patches: int):
+    """Reset per-round RX counters only; merged_latent is never cleared."""
+    global _gnuradio_latent_received_keys, _gnuradio_latent_patches_received
+    global _gnuradio_latent_patches_expected, _gnuradio_latent_rx_generation
+    global _gnuradio_latent_round_decoded, _gnuradio_latent_preview_milestone
+    global _gnuradio_latent_last_preview_ts
+    with _gnuradio_latent_lock:
+        _gnuradio_latent_received_keys.clear()
+        _gnuradio_latent_patches_received = 0
+        _gnuradio_latent_patches_expected = max(0, int(expected_patches))
+        _gnuradio_latent_rx_generation = int(tx_gen)
+        _gnuradio_latent_round_decoded = False
+        _gnuradio_latent_preview_milestone = -1
+        _gnuradio_latent_last_preview_ts = 0.0
+
+
+def _reset_merged_latent_state(expected_pieces: int = 0, clear_keys: bool = True):
+    """Reset per-round counters only; merged_latent buffer is preserved."""
+    _begin_gnuradio_latent_round(
+        tx_gen=0 if clear_keys else _gnuradio_latent_rx_generation,
+        expected_patches=expected_pieces,
+    )
+
+
+def _apply_gnuradio_latent_piece(piece, tx_gen: int = 0, expected_patches: int = 0) -> Optional[dict]:
+    """
+    Merge one latent patch into the persistent buffer (in-place by spatial region).
+    Returns progress stats for the current TX round.
+    """
+    global merged_latent, _gnuradio_latent_patches_received, _gnuradio_latent_patches_expected
+
+    if tx_gen > 0 and tx_gen != _gnuradio_latent_rx_generation:
+        _begin_gnuradio_latent_round(tx_gen, expected_patches)
+    elif expected_patches > 0 and _gnuradio_latent_patches_expected == 0:
+        _gnuradio_latent_patches_expected = int(expected_patches)
+
+    with _gnuradio_latent_lock:
+        merged_latent = redraw_image(piece, merged_latent)
+        _gnuradio_latent_received_keys.update(_latent_spatial_coverage_keys(piece))
+        _gnuradio_latent_patches_received += 1
+        return {
+            "n_patches": _gnuradio_latent_patches_received,
+            "n_patches_exp": _gnuradio_latent_patches_expected,
+            "n_cells": len(_gnuradio_latent_received_keys),
+            "n_cells_exp": _gnuradio_latent_cells_expected,
+        }
+
+
+def _latent_coverage_complete() -> bool:
+    with _gnuradio_latent_lock:
+        exp = _gnuradio_latent_patches_expected
+        if exp <= 0 or _gnuradio_latent_round_decoded:
+            return False
+        return _gnuradio_latent_patches_received >= exp
+
+
+def _maybe_preview_decode_gnuradio_latent(csis: list[str], n_cells: int, n_cells_exp: int):
+    """
+    Periodic partial msg2img for UX (preview quality improves as grid coverage grows).
+    Uses grid-cell coverage for progress; final decode uses patch count.
+    """
+    global _gnuradio_latent_preview_milestone, _gnuradio_latent_last_preview_ts
+    if n_cells_exp <= 0 or _latent_coverage_complete():
+        return
+    min_cells = max(4, n_cells_exp // 25)
+    if n_cells < min_cells:
+        return
+    milestone = min(9, int(10.0 * n_cells / n_cells_exp))
+    if milestone <= _gnuradio_latent_preview_milestone:
+        return
+    now = time.time()
+    if now - _gnuradio_latent_last_preview_ts < GNURADIO_LATENT_PREVIEW_MIN_INTERVAL_S:
+        return
+    _gnuradio_latent_preview_milestone = milestone
+    _gnuradio_latent_last_preview_ts = now
+    with _gnuradio_latent_lock:
+        latent_snapshot = merged_latent.copy()
+    pct = int(100.0 * n_cells / n_cells_exp)
+    print(f"JSCE latent preview decode at ~{pct}% grid ({n_cells}/{n_cells_exp} cells)")
+    _decode_and_emit_latent_for_csis(latent_snapshot, csis, is_piece=True)
+
+
+def _maybe_decode_complete_gnuradio_latent(csis: list[str]) -> bool:
+    """Run msg2img once all UDP patches for the round have arrived."""
+    if not _latent_coverage_complete():
+        return False
+    global _gnuradio_latent_round_decoded
+    with _gnuradio_latent_lock:
+        n_patches = _gnuradio_latent_patches_received
+        n_exp = _gnuradio_latent_patches_expected
+        n_cells = len(_gnuradio_latent_received_keys)
+        latent_snapshot = merged_latent.copy()
+        _gnuradio_latent_round_decoded = True
+    print(
+        f"JSCE latent complete ({n_patches}/{n_exp} patches, "
+        f"{n_cells}/{_gnuradio_latent_cells_expected} cells) — final decode"
+    )
+    _decode_and_emit_latent_for_csis(latent_snapshot, csis, is_piece=False)
+    return True
+
+
+def _reset_gnuradio_rx_state(csis: list[str]):
+    """Track active GNU Radio links and reset JSCE latent RX state."""
+    global active_gnuradio_csis
+    active_gnuradio_csis = [str(c) for c in csis]
+    with _gnuradio_rx_lock:
+        _gnuradio_rx_csi_queue.clear()
+    _reset_merged_latent_state()
+
+
+def _queue_gnuradio_rx_csi(csi: str):
+    with _gnuradio_rx_lock:
+        _gnuradio_rx_csi_queue.append(str(csi))
+
+
+def _resolve_gnuradio_rx_csi() -> str:
+    with _gnuradio_rx_lock:
+        if _gnuradio_rx_csi_queue:
+            return _gnuradio_rx_csi_queue.popleft()
+    if len(active_gnuradio_csis) == 1:
+        return active_gnuradio_csis[0]
+    if active_gnuradio_csis:
+        return active_gnuradio_csis[0]
+    return "jpeg"
+
+
+def _ensure_receiver_running():
+    """GNU Radio path delivers decoded latent pieces on UDP; start listener if not already up."""
+    global stop_thread, receiver_task_running
+    if receiver_task_running:
+        return
+    stop_thread = False
+    receiver_task_running = True
+    socketio.start_background_task(receive_pieces)
+
+
+def _decode_and_emit_latent_for_csis(latent_snapshot: np.ndarray, csis: list[str], is_piece: bool):
+    """Run JSCE msg2img for each CSI and push JPEG updates + metrics to the UI."""
+    codec = _get_jsce_codec()
+    delay = RX_PIECE_EMIT_DELAY_S if is_piece else 0.012
+    for sc in csis:
+        sc = str(sc)
+        try:
+            pil_out = codec.msg2img(latent_snapshot, sc)
+            pil_out = pil_out.resize((IMAGE_SIZE[1], IMAGE_SIZE[0]), Image.Resampling.LANCZOS)
+            frame = np.array(pil_out.convert("RGB"), dtype=np.uint8)
+        except Exception as e:
+            print(f"JSCE decode failed for csi={sc}: {e}")
+            continue
+
+        reconstructed_images[sc] = frame
+        orig = original_images.get(sc)
+        if orig is not None:
+            _update_quality_metrics(sc, frame, orig)
+        _emit_metrics(sc)
+
+        img = Image.fromarray(frame.astype("uint8"), "RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG")
+        buf.seek(0)
+        img_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+        socketio.emit(
+            "image_update",
+            {
+                "csi": sc,
+                "image": f"data:image/jpeg;base64,{img_base64}",
+                "piece": is_piece,
+                "preview": is_piece,
+            },
+        )
+        try:
+            socketio.sleep(delay)
+        except Exception:
+            time.sleep(delay)
+
+
 def receive_pieces():
     global stop_thread
     global reconstructed_images
+    global merged_latent
     print("Starting receive_pieces function...")
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         print(f"Binding to {HOST}:{PORT}")
         s.bind((HOST, PORT))
         s.settimeout(1.0)  # Add timeout to allow checking stop_thread
-        
+
         while not stop_thread:
             try:
                 data, client_address = s.recvfrom(UDP_RECV_BUF)
@@ -340,8 +740,41 @@ def receive_pieces():
                     continue
 
                 kind, obj = _try_decode_udp(data)
-                is_piece = kind in ("piece", "piece_csi")
-                if is_piece:
+                is_piece = kind in ("piece", "piece_csi", "latent_piece")
+                if kind == "latent_piece":
+                    msg = obj
+                    piece = msg["piece"]
+                    (yy, xx, cc), _ = piece
+                    print(f"Received JSCE latent piece at ({yy}, {xx}, {cc})")
+
+                    stats = _apply_gnuradio_latent_piece(
+                        piece,
+                        tx_gen=msg.get("tx_gen", 0),
+                        expected_patches=msg.get("expected_patches", 0),
+                    )
+
+                    csis = list(active_gnuradio_csis) or ["default"]
+                    piece_bytes = _estimate_piece_bytes(csis[0], piece)
+                    n_patches = stats["n_patches"]
+                    n_patches_exp = stats["n_patches_exp"]
+                    n_cells = stats["n_cells"]
+                    n_cells_exp = stats["n_cells_exp"]
+
+                    for sc in csis:
+                        if sc not in metrics_state:
+                            init_metrics(sc, expected_pieces=max(n_patches_exp, 1))
+                        _update_piece_metrics(sc, piece_bytes)
+                        _emit_metrics(sc)
+
+                    if n_patches % 20 == 0 or n_patches == n_patches_exp:
+                        print(
+                            f"JSCE latent: {n_patches}/{n_patches_exp} patches, "
+                            f"{n_cells}/{n_cells_exp} cells"
+                        )
+
+                    _maybe_preview_decode_gnuradio_latent(csis, n_cells, n_cells_exp)
+                    _maybe_decode_complete_gnuradio_latent(csis)
+                elif kind in ("piece", "piece_csi"):
                     if kind == "piece":
                         csi = "default"
                         piece = obj
@@ -360,7 +793,7 @@ def receive_pieces():
                     # --- metrics ---
                     if csi not in metrics_state:
                         uph, upw = PIECE_SIZE
-                        exp = (IMAGE_SIZE[0] // uph) * (IMAGE_SIZE[1] // upw) * 3
+                        exp = (IMAGE_SIZE[0] // uph) * (IMAGE_SIZE[1] // upw)
                         init_metrics(csi, expected_pieces=exp)
                     _update_piece_metrics(csi, _estimate_piece_bytes(csi, piece))
                     # periodically compute quality during UDP rebuild
@@ -370,35 +803,72 @@ def receive_pieces():
                         if orig is not None:
                             _update_quality_metrics(csi, reconstructed_images[csi], orig)
                     _emit_metrics(csi)
+
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG")
+                    buf.seek(0)
+                    img_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                    socketio.emit(
+                        "image_update",
+                        {
+                            "csi": csi,
+                            "image": f"data:image/jpeg;base64,{img_base64}",
+                            "piece": is_piece,
+                        },
+                    )
+                    delay = RX_PIECE_EMIT_DELAY_S if is_piece else 0.012
+                    try:
+                        socketio.sleep(delay)
+                    except Exception:
+                        time.sleep(delay)
                 elif kind == "jpeg":
                     img = obj
-                    csi = "jpeg"
+                    csi = _resolve_gnuradio_rx_csi()
+                    if img.size != (IMAGE_SIZE[1], IMAGE_SIZE[0]):
+                        img = img.resize((IMAGE_SIZE[1], IMAGE_SIZE[0]), Image.Resampling.LANCZOS)
+                    frame = np.array(img.convert("RGB"), dtype=np.uint8)
+                    reconstructed_images[csi] = frame
+                    print(f"Received GNU Radio decoded image for csi={csi} ({frame.shape[1]}x{frame.shape[0]})")
+                    if csi not in metrics_state:
+                        init_metrics(csi)
+                    st = metrics_state[csi]
+                    st["total_bytes"] += frame.nbytes
+                    st["_last_piece_time"] = time.time()
+                    if st.get("expected_pieces", 0) > 0:
+                        st["piece_count"] = st["expected_pieces"]
+                    else:
+                        st["piece_count"] = max(st["piece_count"], 1)
+                    orig = original_images.get(csi)
+                    if orig is not None:
+                        _update_quality_metrics(csi, frame, orig)
+                    _emit_metrics(csi)
+
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG")
+                    buf.seek(0)
+                    img_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                    socketio.emit(
+                        "image_update",
+                        {
+                            "csi": csi,
+                            "image": f"data:image/jpeg;base64,{img_base64}",
+                            "piece": is_piece,
+                        },
+                    )
+                    delay = RX_PIECE_EMIT_DELAY_S if is_piece else 0.012
+                    try:
+                        socketio.sleep(delay)
+                    except Exception:
+                        time.sleep(delay)
                 else:
                     continue
 
-                buf = io.BytesIO()
-                img.save(buf, format="JPEG")
-                buf.seek(0)
-                img_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-                socketio.emit(
-                    "image_update",
-                    {
-                        "csi": csi,
-                        "image": f"data:image/jpeg;base64,{img_base64}",
-                        "piece": is_piece,
-                    },
-                )
-                delay = RX_PIECE_EMIT_DELAY_S if is_piece else 0.012
-                try:
-                    socketio.sleep(delay)
-                except Exception:
-                    time.sleep(delay)
-                
             except socket.timeout:
                 continue
             except Exception as e:
                 print(f"An error occurred: {e}")
                 continue
+
 
 @app.route('/')
 def index():
@@ -443,11 +913,12 @@ def _reset_rx_for_csis(csis: list[str]):
         reconstructed_images.pop(c, None)
         metrics_state.pop(c, None)
         _metrics_last_emit.pop(c, None)
+    _reset_merged_latent_state()
     socketio.emit("rx_reset", {"csis": csis})
 
 
 def _emit_jpeg_piece_update(
-    csi: str, frame: np.ndarray, is_piece: bool, delay_s: float, sleep_fn
+        csi: str, frame: np.ndarray, is_piece: bool, delay_s: float, sleep_fn
 ):
     """Encode frame as JPEG and emit image_update (same shape as receive_pieces)."""
     img = Image.fromarray(frame.astype("uint8"), "RGB")
@@ -467,8 +938,8 @@ def _emit_jpeg_piece_update(
 
 
 def _stream_neural_decoded_pieces(
-    csi: str, decoded_rgb: np.ndarray, piece_delay_s: float, sleep_fn,
-    piece_size: Optional[tuple[int, int]] = None,
+        csi: str, decoded_rgb: np.ndarray, piece_delay_s: float, sleep_fn,
+        piece_size: Optional[tuple[int, int]] = None,
 ):
     """
     Shuffled piece-by-piece reveal of one decoded view (mirrors UDP detach/rebuild + channel toy model).
@@ -542,8 +1013,8 @@ def _stream_neural_decoded_pieces(
 
 
 def _neural_bypass_worker(
-    saved: list[tuple[str, str]], piece_delay_s: float,
-    piece_size: Optional[tuple[int, int]] = None,
+        saved: list[tuple[str, str]], piece_delay_s: float,
+        piece_size: Optional[tuple[int, int]] = None,
 ):
     """
     JSCE encode/decode without UDP: re-reads images each round (like a looping TX), merges latent,
@@ -617,9 +1088,9 @@ def _neural_bypass_worker(
 
 
 def _continual_transmit_worker(
-    image_dir: str, csis: list[str], piece_delay_s: float, round_interval_s: float = 3.0,
-    hf_dataset_name: str = "", time_delay_mode: bool = False,
-    piece_size: Optional[tuple[int, int]] = None,
+        image_dir: str, csis: list[str], piece_delay_s: float, round_interval_s: float = 3.0,
+        hf_dataset_name: str = "", time_delay_mode: bool = False,
+        piece_size: Optional[tuple[int, int]] = None,
 ):
     """
     Continual transmission mode:
@@ -811,7 +1282,8 @@ def _continual_transmit_worker(
 
             socketio.emit(
                 "tx_status",
-                {"message": f"Round {round_num} done{', encode {:.3f}s'.format(encode_time) if time_delay_mode else ''} — {round_interval_s:.0f}s pause..."},
+                {
+                    "message": f"Round {round_num} done{', encode {:.3f}s'.format(encode_time) if time_delay_mode else ''} — {round_interval_s:.0f}s pause..."},
             )
 
             # pause between rounds
@@ -827,19 +1299,92 @@ def _continual_transmit_worker(
         traceback.print_exc()
 
 
+def _transmit_jsce_latent_over_gnuradio(
+        sock: socket.socket,
+        image_dict: dict[str, Image.Image],
+        csis: list[str],
+        gr_port: int,
+        piece_delay_s: float,
+        piece_size: tuple[int, int],
+) -> bool:
+    """
+    JSCE img2msg → spatial latent atoms (all channels, 802.11-safe) → UDP to GNU Radio.
+    Returns False on MTU / codec failure.
+    """
+    from image_detach_rebuild import detach_image
+
+    try:
+        codec = _get_jsce_codec()
+        latent = codec.img2msg(image_dict)
+    except Exception as e:
+        socketio.emit("tx_status", {"message": f"JSCE encode failed: {e}"})
+        return False
+
+    pieces = detach_image(latent, piece_size=piece_size)
+    exp = _expected_latent_pieces(piece_size)
+    pkt_bytes = _estimate_gnuradio_latent_piece_packet_bytes(piece_size[0], piece_size[1])
+
+    global _gnuradio_latent_tx_generation
+    _gnuradio_latent_tx_generation += 1
+    tx_gen = _gnuradio_latent_tx_generation
+
+    socketio.emit(
+        "tx_status",
+        {
+            "message": (
+                f"JSCE latent TX round {tx_gen}: patch {piece_size[0]}x{piece_size[1]}x{CODEC_COMPRESSED_CH} "
+                f"(float16 wire, ~{pkt_bytes} B/frame, {exp} patches/round)"
+            ),
+        },
+    )
+    for sc in csis:
+        init_metrics(str(sc), expected_pieces=exp)
+
+    channel_csi = str(csis[0]) if csis else "3-4"
+    for piece in pieces:
+        if send_stop_flag.is_set():
+            break
+        if channel_csi not in channel_states:
+            _compute_channel_state_for_csi(channel_csi)
+        piece2 = _apply_channel_effect_latent(piece, channel_csi)
+        if piece2 is None:
+            for sc in csis:
+                _update_piece_metrics(str(sc), dropped=True)
+                _emit_metrics(str(sc))
+            continue
+
+        packet = _len_prefixed_packet(
+            _pickle_jsce_latent_payload(piece2, tx_gen=tx_gen, expected_patches=exp)
+        )
+        if len(packet) > GNURADIO_MAC_MSDU_MAX:
+            socketio.emit(
+                "tx_status",
+                {
+                    "message": _gnuradio_latent_piece_size_error(piece_size)
+                    or f"Latent packet {len(packet)} B exceeds 802.11 MAC limit {GNURADIO_MAC_MSDU_MAX} B",
+                },
+            )
+            return False
+        sock.sendto(packet, (HOST, int(gr_port)))
+        time.sleep(piece_delay_s)
+    return True
+
+
 def _continual_gnuradio_worker(
-    image_dir: str, csis: list[str], piece_delay_s: float, round_interval_s: float = 3.0,
-    hf_dataset_name: str = "", gr_port: int = GNURADIO_PDU_PORT,
-    piece_size=(50, 50),
+        image_dir: str, csis: list[str], piece_delay_s: float, round_interval_s: float = 3.0,
+        hf_dataset_name: str = "", gr_port: int = GNURADIO_PDU_PORT,
+        piece_size=None,
 ):
     """
-    Continual transmission mode via GNU Radio:
-    - Each round, sample images from *image_dir* (or *hf_dataset_name*).
-    - Detach each image into pieces and send via UDP to GNU Radio PDU port.
-    - Pieces are tagged with CSI so the receiver (port 10010) can route them.
-    - Toy channel model (drop + noise) applied server-side.
+    Continual transmission via GNU Radio + JSCE:
+    - Each round, sample one image per CSI link.
+    - img2msg merges latents, detach spatial patches, send over UDP to GNU Radio.
+    - RX rebuilds merged latent and msg2img per CSI (port 10010).
     """
-    from image_detach_rebuild import detach_image_patches
+    if piece_size is None:
+        piece_size = _resolve_gnuradio_latent_piece_size()
+    else:
+        piece_size = _resolve_gnuradio_latent_piece_size(user_hint=piece_size)
 
     def _sleep(d: float):
         try:
@@ -885,7 +1430,8 @@ def _continual_gnuradio_worker(
                         continue
                     indices = random.sample(range(hf_dataset_size), n_links)
                     hf_rows = [hf_dataset[i] for i in indices]
-                    image_key = "image" if "image" in hf_rows[0] else (next(k for k in ("img", "png") if k in hf_rows[0]))
+                    image_key = "image" if "image" in hf_rows[0] else (
+                        next(k for k in ("img", "png") if k in hf_rows[0]))
                     basenames = [f"hf_{i}" for i in indices]
                     pil_images = []
                     for row in hf_rows:
@@ -909,7 +1455,8 @@ def _continual_gnuradio_worker(
                     if len(all_files) < n_links:
                         socketio.emit(
                             "tx_status",
-                            {"message": f"Round {round_num}: need {n_links} images, found {len(all_files)}. Retrying..."},
+                            {
+                                "message": f"Round {round_num}: need {n_links} images, found {len(all_files)}. Retrying..."},
                         )
                         _sleep(round_interval_s)
                         continue
@@ -920,10 +1467,13 @@ def _continual_gnuradio_worker(
                     for f in selected:
                         pil_images.append(Image.open(os.path.join(image_dir, f)).convert("RGB"))
 
-                # --- load originals ---
+                # --- originals for metrics + JSCE encode input ---
                 round_originals = {}
+                image_dict: dict[str, Image.Image] = {}
                 for i, csi in enumerate(csis):
                     sc = str(csi)
+                    pil_images[i].load()
+                    image_dict[sc] = pil_images[i].convert("RGB")
                     round_originals[sc] = np.array(
                         pil_images[i].resize((IMAGE_SIZE[1], IMAGE_SIZE[0])), dtype=np.uint8
                     )
@@ -933,37 +1483,18 @@ def _continual_gnuradio_worker(
                 socketio.emit("round_update", {"round": round_num, "files": basenames, "csis": list(csis)})
                 socketio.emit(
                     "tx_status",
-                    {"message": f"Round {round_num}/inf via GNU Radio: {', '.join(basenames)} (port {gr_port})"},
+                    {
+                        "message": (
+                            f"Round {round_num}/inf via GNU Radio+JSCE: {', '.join(basenames)} "
+                            f"(latent patch {piece_size[0]}x{piece_size[1]}, port {gr_port})"
+                        ),
+                    },
                 )
 
-                # --- detach each image and send pieces via UDP ---
-                for i, csi in enumerate(csis):
-                    sc = str(csi)
-                    img_arr = np.array(pil_images[i].resize((IMAGE_SIZE[1], IMAGE_SIZE[0])), dtype=np.uint8)
-                    pieces = detach_image_patches(img_arr, piece_size=piece_size)
-
-                    if sc not in metrics_state:
-                        ph, pw = piece_size
-                        exp = (IMAGE_SIZE[0] // ph) * (IMAGE_SIZE[1] // pw) * 3
-                        init_metrics(sc, expected_pieces=exp)
-
-                    for piece in pieces:
-                        if send_stop_flag.is_set():
-                            break
-                        if sc not in channel_states:
-                            _compute_channel_state_for_csi(sc)
-                        piece2 = _apply_channel_effect(piece, sc)
-                        if piece2 is None:
-                            _update_piece_metrics(sc, dropped=True)
-                            _emit_metrics(sc)
-                            continue
-
-                        payload = pickle.dumps({"csi": sc, "piece": piece2}, protocol=pickle.HIGHEST_PROTOCOL)
-                        message_size = struct.pack("=L", len(payload))
-                        s.sendto(message_size + payload, (HOST, int(gr_port)))
-                        _update_piece_metrics(sc, _estimate_piece_bytes(sc, piece2))
-                        _emit_metrics(sc)
-                        time.sleep(piece_delay_s)
+                if not _transmit_jsce_latent_over_gnuradio(
+                    s, image_dict, csis, gr_port, piece_delay_s, piece_size,
+                ):
+                    return
 
                 socketio.emit(
                     "tx_status",
@@ -982,40 +1513,37 @@ def _continual_gnuradio_worker(
         traceback.print_exc()
 
 
-
-def _send_image_worker(image_path: str, port: int, csi: str, piece_delay_s: float):
+def _gnuradio_jsce_user_worker(
+        saved: list[tuple[str, str]],
+        gr_port: int,
+        piece_delay_s: float,
+        piece_size: Optional[tuple[int, int]] = None,
+):
     """
-    Send detached image pieces via UDP.
-    Note: This uses the same "piece" structure as `image_detach_rebuild.detach_image`.
+    User-defined mode: re-read uploaded images each round, JSCE encode merged latent,
+    send patches to GNU Radio until stopped.
     """
-    from image_detach_rebuild import detach_image
+    if piece_size is None:
+        piece_size = _resolve_gnuradio_latent_piece_size()
+    else:
+        piece_size = _resolve_gnuradio_latent_piece_size(user_hint=piece_size)
+    csis = [str(csi) for _, csi in saved]
 
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         while not send_stop_flag.is_set():
+            image_dict: dict[str, Image.Image] = {}
             try:
-                original_image = np.array(
-                    Image.open(image_path).convert("RGB").resize((300, 300)),
-                    dtype=np.uint8,
-                )
+                for path, csi in saved:
+                    image_dict[str(csi)] = Image.open(path).convert("RGB")
             except Exception as e:
-                print(f"UDP TX re-read failed {image_path}: {e}")
+                print(f"GNU Radio JSCE re-read failed: {e}")
                 time.sleep(0.2)
                 continue
-            pieces = detach_image(original_image)
-            for piece in pieces:
-                if send_stop_flag.is_set():
-                    break
 
-                if csi not in channel_states:
-                    _compute_channel_state_for_csi(csi)
-
-                piece2 = _apply_channel_effect(piece, csi)
-                if piece2 is None:
-                    continue
-                payload = pickle.dumps({"csi": csi, "piece": piece2}, protocol=pickle.HIGHEST_PROTOCOL)
-                message_size = struct.pack("=L", len(payload))
-                s.sendto(message_size + payload, (HOST, int(port)))
-                time.sleep(piece_delay_s)
+            if not _transmit_jsce_latent_over_gnuradio(
+                s, image_dict, csis, gr_port, piece_delay_s, piece_size,
+            ):
+                return
 
 
 @app.route("/send_image", methods=["POST"])
@@ -1024,6 +1552,10 @@ def handle_send_image():
         os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
     mode = (request.form.get("mode") or "user").strip()
+
+    global _sim_channel_effect_enabled
+    _sim_channel_effect_enabled = _form_flag("sim_channel_effect")
+    sim_ch_label = "sim channel ON" if _sim_channel_effect_enabled else "sim channel OFF"
 
     # --- Continual transmission mode ---
     if mode == "continual":
@@ -1068,6 +1600,11 @@ def handle_send_image():
             channel_states.setdefault(csi, {})["drop_prob_extra"] = extra_loss
             _compute_channel_state_for_csi(csi)
 
+        try:
+            gr_port = int(request.form.get("gnuradio_port") or GNURADIO_PDU_PORT)
+        except ValueError:
+            gr_port = GNURADIO_PDU_PORT
+
         _reset_rx_for_csis(csis)
         # Reset time delay data when starting
         time_delay_data.clear()
@@ -1094,18 +1631,27 @@ def handle_send_image():
                 },
             )
         else:
+            latent_piece_size = _resolve_gnuradio_latent_piece_size()
+            mtu_err = _gnuradio_latent_piece_size_error(latent_piece_size)
+            if mtu_err:
+                return jsonify({"status": "error", "reason": mtu_err}), 400
+            pkt_b = _estimate_gnuradio_latent_piece_packet_bytes(*latent_piece_size)
+            _reset_gnuradio_rx_state(csis)
+            _ensure_receiver_running()
             socketio.start_background_task(
                 _continual_gnuradio_worker, image_dir, csis, piece_delay_s, round_interval_s,
                 hf_dataset_name if use_hf else "", gr_port,
-                piece_size=(bypass_piece_size, bypass_piece_size),
+                piece_size=latent_piece_size,
             )
             links_info = f"HF dataset '{hf_dataset_name}'" if use_hf else f"dir '{image_dir}'"
             socketio.emit(
                 "tx_status",
                 {
                     "message": (
-                        f"Continual TX via GNU Radio (port {gr_port}) from {links_info} "
-                        f"({len(csis)} link(s), ~{round_interval_s:.0f}s interval). Stop to end."
+                        f"Continual TX via GNU Radio+JSCE (port {gr_port}) from {links_info} "
+                        f"({len(csis)} link(s), patch {latent_piece_size[0]}x{latent_piece_size[1]} "
+                        f"float16 ~{pkt_b} B/frame, preview decodes every ~10%, "
+                        f"~{round_interval_s:.0f}s interval, {sim_ch_label}). Stop to end."
                     )
                 },
             )
@@ -1209,20 +1755,32 @@ def handle_send_image():
         )
         return jsonify({"status": "sending", "links": started, "mode": "neural"})
 
+    latent_piece_size = _resolve_gnuradio_latent_piece_size()
+    mtu_err = _gnuradio_latent_piece_size_error(latent_piece_size)
+    if mtu_err:
+        return jsonify({"status": "error", "reason": mtu_err}), 400
+    pkt_b = _estimate_gnuradio_latent_piece_packet_bytes(*latent_piece_size)
+
+    _reset_gnuradio_rx_state(rx_csis)
+    _ensure_receiver_running()
     send_stop_flag.clear()
-    for file_path, csi in saved:
-        threading.Thread(
-            target=_send_image_worker,
-            args=(file_path, gr_port, csi, piece_delay_s),
-            daemon=True,
-        ).start()
+    socketio.start_background_task(
+        _gnuradio_jsce_user_worker,
+        saved,
+        gr_port,
+        piece_delay_s,
+        latent_piece_size,
+    )
 
     socketio.emit(
         "tx_status",
         {
             "message": (
-                f"UDP TX: {started} link(s) → {HOST}:{gr_port} "
-                f"(piece gap {piece_delay_ms:.0f} ms, extra loss {packet_loss_pct:.0f}%)"
+                f"GNU Radio+JSCE TX: {started} link(s) → {HOST}:{gr_port} "
+                f"(patch {latent_piece_size[0]}x{latent_piece_size[1]} float16 ~{pkt_b} B/frame, "
+                f"preview every ~10%, gap {piece_delay_ms:.0f} ms, loss {packet_loss_pct:.0f}%, "
+                f"{sim_ch_label}). "
+                f"Stop to end."
             )
         },
     )
@@ -1235,28 +1793,35 @@ def handle_stop_send():
     socketio.emit("tx_status", {"message": "TX stopped"})
     return jsonify({"status": "stopped"})
 
+
 @socketio.on('connect')
 def handle_connect():
     print("Client connected")  # Debug log
     for csi in selected_csis:
         _compute_channel_state_for_csi(csi)
-    socketio.emit("canvas_state", {"nodes": nodes_state, "selected_csis": selected_csis, "channel_states": channel_states})
+    socketio.emit("canvas_state",
+                  {"nodes": nodes_state, "selected_csis": selected_csis, "channel_states": channel_states})
+
 
 @socketio.on('start_receiving')
 def handle_start():
-    global stop_thread
+    global stop_thread, receiver_task_running
     print("Received start signal")  # Debug log
     stop_thread = False
-    socketio.start_background_task(receive_pieces)
+    if not receiver_task_running:
+        receiver_task_running = True
+        socketio.start_background_task(receive_pieces)
     """thread = threading.Thread(target=receive_pieces)
     thread.daemon = True
     thread.start()"""
 
+
 @socketio.on('stop_receiving')
 def handle_stop():
-    global stop_thread
+    global stop_thread, receiver_task_running
     print("Received stop signal")  # Debug log
     stop_thread = True
+    receiver_task_running = False
 
 
 @socketio.on("canvas_update")
@@ -1274,9 +1839,11 @@ def handle_canvas_update(data):
             selected_csis = [str(x) for x in csis if str(x)]
         for csi in selected_csis:
             _compute_channel_state_for_csi(csi)
-        socketio.emit("canvas_state", {"nodes": nodes_state, "selected_csis": selected_csis, "channel_states": channel_states})
+        socketio.emit("canvas_state",
+                      {"nodes": nodes_state, "selected_csis": selected_csis, "channel_states": channel_states})
     except Exception as e:
         socketio.emit("status", {"message": f"canvas_update error: {e}"})
+
 
 if __name__ == "__main__":
     # debug=True but no reloader: stat reloader often restarts when site-packages

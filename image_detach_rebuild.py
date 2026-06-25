@@ -22,7 +22,7 @@ def detach_image(image, piece_size=PIECE_SIZE):
     Returns:
     list: A shuffled list of tuples where each tuple contains the piece and its original position.
     """
-    height, width, channels = image.shape
+    height, width, _channels = image.shape
     piece_h, piece_w = _normalize_piece_size(piece_size)
     # assert height < piece_size[0] and width < piece_size[1], "Image is too small."
     # assert channels == 3, "Image must have 3 channels (RGB)."
@@ -32,9 +32,8 @@ def detach_image(image, piece_size=PIECE_SIZE):
     pieces = []
     for y in range(0, height, piece_h):
         for x in range(0, width, piece_w):
-            for c in range(channels):
-                piece = image[y:y + piece_h, x:x + piece_w, c:c + 1]
-                pieces.append(((y, x, c), piece))
+            piece = image[y:y + piece_h, x:x + piece_w, :]
+            pieces.append(((y, x, 0), piece))
 
     shuffled_pieces = shuffle(pieces)
     return shuffled_pieces
@@ -56,6 +55,34 @@ def detach_image_patches(image, piece_size=PATCH_PIECE_SIZE):
         for x in range(0, width, piece_w):
             piece = image[y:y + piece_h, x:x + piece_w, :]
             pieces.append(((y, x, 0), piece))
+
+    return shuffle(pieces)
+
+
+def detach_latent_spatial_pieces(latent, piece_size=PIECE_SIZE):
+    """
+    Detach JSCE latent (H, W, C) into spatial patches keeping all C channels together.
+    Suitable for WiFi when piece_size is 1x1 (~700 B per atom for C=128).
+    """
+    return detach_image(latent, piece_size=piece_size)
+
+
+def detach_latent_channel_pieces(latent, piece_size=PIECE_SIZE):
+    """
+    Deprecated: splits along channel dim — do not use for JSCE decode (needs full C per cell).
+    Kept for experiments only.
+    """
+    height, width, channels = latent.shape
+    piece_h, piece_w = _normalize_piece_size(piece_size)
+    piece_h = min(piece_h, height)
+    piece_w = min(piece_w, width)
+
+    pieces = []
+    for y in range(0, height, piece_h):
+        for x in range(0, width, piece_w):
+            for c in range(channels):
+                piece = latent[y:y + piece_h, x:x + piece_w, c:c + 1]
+                pieces.append(((y, x, c), piece))
 
     return shuffle(pieces)
 
